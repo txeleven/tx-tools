@@ -37,6 +37,12 @@ export default {
     contextMenuDesc: 'Select text on a webpage, right-click to quickly decode Base64 / format JSON / convert timestamp',
     about: 'About',
     aboutDesc: 'All computations run locally in your browser. Your data never leaves the device.',
+    version: 'Version',
+    author: 'Author',
+    github: 'Repository',
+    toolsCount: 'Built-in tools',
+    categories: 'Categories',
+    feedback: 'Submit an Issue',
   },
   nav: {
     encoding: 'Encoding',
@@ -289,7 +295,8 @@ export default {
     noUrl: 'Could not get the current page URL',
   },
   screenshot: {
-    capture: 'Start full page capture',
+    captureView: 'Capture visible area',
+    captureFull: 'Capture full page',
     capturing: 'Capturing...',
     download: 'Download image',
     copyImage: 'Copy image',

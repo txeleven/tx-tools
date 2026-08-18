@@ -37,6 +37,12 @@ export default {
     contextMenuDesc: '在网页上选中文本后右键，可快速进行 Base64 解码 / JSON 格式化 / 时间戳转换',
     about: '关于',
     aboutDesc: '纯前端计算，数据不会离开你的浏览器。所有功能本地运行。',
+    version: '版本',
+    author: '作者',
+    github: '仓库',
+    toolsCount: '内置工具',
+    categories: '分类',
+    feedback: '提交反馈 Issue',
   },
   nav: {
     encoding: '编码转换',
@@ -289,7 +295,8 @@ export default {
     noUrl: '未能获取当前页面地址',
   },
   screenshot: {
-    capture: '开始滚动截屏',
+    captureView: '截当前页',
+    captureFull: '滚动截所有页',
     capturing: '截屏中...',
     download: '下载图片',
     copyImage: '复制图片',

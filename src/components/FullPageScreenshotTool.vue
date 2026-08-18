@@ -6,7 +6,8 @@
     </div>
 
     <div class="toolbar">
-      <button class="primary" :disabled="running" @click="start">{{ t('screenshot.capture') }}</button>
+      <button class="primary" :disabled="running" @click="startView">{{ t('screenshot.captureView') }}</button>
+      <button class="primary" :disabled="running" @click="start">{{ t('screenshot.captureFull') }}</button>
       <button :disabled="!image || running" @click="download">{{ t('screenshot.download') }}</button>
       <span class="spacer"></span>
       <span v-if="running" class="status info">{{ progressLabel }}</span>
@@ -62,6 +63,34 @@ async function getActiveTab() {
   if (typeof chrome === 'undefined' || !chrome.tabs) return null
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
   return tabs && tabs[0] ? tabs[0] : null
+}
+
+// 截当前页：直接截取当前标签页可见区域
+async function startView() {
+  error.value = ''
+  resultInfo.value = ''
+  image.value = ''
+  const tab = await getActiveTab()
+  if (!tab || tab.id == null) {
+    error.value = t('screenshot.noTab')
+    return
+  }
+  running.value = true
+  progress.value = 0
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' })
+    // 读取图片尺寸用于结果提示
+    const img = new Image()
+    img.onload = () => {
+      resultInfo.value = `${t('screenshot.result')}: ${img.width}×${img.height}px`
+    }
+    img.src = dataUrl
+    image.value = dataUrl
+  } catch (e) {
+    error.value = `${t('common.error')}: ${e.message}`
+  } finally {
+    running.value = false
+  }
 }
 
 async function start() {
