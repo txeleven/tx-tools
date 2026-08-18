@@ -1,0 +1,382 @@
+/* 全局样式 - 开发者工具风格 */
+:root {
+  --bg: #f7f8fa;
+  --bg-panel: #ffffff;
+  --bg-hover: #f0f2f5;
+  --bg-active: #e8edf5;
+  --border: #e2e5ea;
+  --text: #1f2329;
+  --text-secondary: #6b7280;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-soft: #eff4ff;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --warning: #d97706;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --mono: 'SF Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 13px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+button:hover {
+  background: var(--bg-hover);
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+button.primary:hover {
+  background: var(--primary-hover);
+}
+
+button.danger {
+  color: var(--danger);
+  border-color: #f3c6c6;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+textarea, input, select {
+  font-family: inherit;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+
+textarea:focus, input:focus, select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+textarea {
+  font-family: var(--mono);
+  resize: vertical;
+  min-height: 260px;
+  line-height: 1.6;
+}
+
+/* 工具通用布局 */
+.tool-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.tool-title {
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-desc {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+/* 输出区域 */
+.output-box {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  overflow: auto;
+  flex: 1;
+  min-height: 60px;
+  font-family: var(--mono);
+  resize: vertical;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  position: relative;
+}
+
+/* 行号展示框（LinesBox 组件）：行高继承上下文，保证 gutter 与内容逐行对齐 */
+.lines-box {
+  display: flex;
+  align-items: stretch;
+  min-width: min-content;
+  font-family: var(--mono);
+  font-size: inherit;
+  line-height: 1.6;
+}
+
+.lines-gutter {
+  flex: none;
+  padding-right: 10px;
+  margin-right: 10px;
+  border-right: 1px solid var(--border);
+  text-align: right;
+  color: var(--text-secondary);
+  opacity: 0.65;
+  user-select: none;
+  white-space: pre;
+  font: inherit;
+}
+
+.lines-body {
+  flex: 1;
+  min-width: 0;
+  white-space: pre;
+  font: inherit;
+}
+
+.lines-body pre {
+  margin: 0;
+  font: inherit;
+  white-space: pre;
+}
+
+/* 结果行 */
+.result-row {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.result-row .label {
+  color: var(--text-secondary);
+  min-width: 90px;
+  font-size: 12px;
+  padding-top: 2px;
+  flex-shrink: 0;
+}
+
+.result-row .value {
+  font-family: var(--mono);
+  word-break: break-all;
+  flex: 1;
+  font-size: 12.5px;
+}
+
+/* 标签页 */
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+
+.tab {
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 0;
+  font-size: 13px;
+}
+
+.tab:hover {
+  background: transparent;
+  color: var(--text);
+}
+
+.tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 600;
+  background: transparent;
+}
+
+/* 状态提示 */
+.status {
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.status.ok {
+  color: var(--success);
+}
+
+.status.err {
+  color: var(--danger);
+}
+
+.status.info {
+  color: var(--text-secondary);
+}
+
+/* 复选行 */
+.check-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+
+.check-line input {
+  width: auto;
+  accent-color: var(--primary);
+}
+
+/* 数值输入行 */
+.num-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.num-line input[type='number'] {
+  width: 80px;
+}
+
+.num-line select {
+  width: auto;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c9cdd4;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a8adb8;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 拖拽调整列宽时禁用文本选择 */
+body.resizing-col {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* 输入/输出区域高度拖拽手柄（由 resizeMemory.js 注入） */
+.resize-handle {
+  height: 6px;
+  flex: none;
+  cursor: row-resize;
+  position: relative;
+  border-radius: 3px;
+}
+
+.resize-handle::after {
+  content: '';
+  display: block;
+  height: 3px;
+  margin: 1px 16px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.resize-handle:hover::after,
+body.resizing-row .resize-handle::after {
+  background: var(--primary);
+}
+
+body.resizing-row {
+  cursor: row-resize;
+  user-select: none;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(31, 35, 41, 0.92);
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  z-index: 9999;
+  animation: toast-in 0.2s ease;
+  pointer-events: none;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* 错误高亮（JSON 行号场景） */
+.mono {
+  font-family: var(--mono);
+}
+
+/* 代码语法高亮（统一 token 类名，全工具生效） */
+.hl-kw { color: #cf222e; font-weight: 600; }
+.hl-str { color: #0a7a37; }
+.hl-num { color: #0550ae; }
+.hl-func { color: #8250df; }
+.hl-comment { color: #6a737d; font-style: italic; }
+.hl-tag { color: #22863a; }
+.hl-attr { color: #e36209; }
+.hl-property { color: #e36209; }
+.hl-var { color: #9a6700; }
