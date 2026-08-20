@@ -6,6 +6,9 @@
         <div class="title">{{ t('app.title') }}</div>
         <div class="subtitle">{{ t('app.subtitle') }}</div>
       </div>
+      <button class="icon-btn lang-toggle" @click="toggleLocale" :title="t('settings.language')">
+        {{ locale === 'zh-CN' ? '中' : 'EN' }}
+      </button>
       <button class="icon-btn" @click="openOptions" title="Settings">⚙</button>
     </header>
 
@@ -43,7 +46,7 @@
 <script setup>
 import { ref, computed, onMounted, watch, watchEffect, nextTick } from 'vue'
 import { popupTools, getToolById } from '../tools/registry.js'
-import { t } from '../i18n/index.js'
+import { t, currentLocale, setLocale } from '../i18n/index.js'
 import { toastState } from '../utils/useToast.js'
 import { restoreHeights, bindHeightMemory } from '../utils/resizeMemory.js'
 import ConfirmDialog from '../components/common/ConfirmDialog.vue'
@@ -53,6 +56,13 @@ const POPUP_TAB_KEY = 'dev-toolbox-popup-tab'
 const tabs = computed(() => popupTools.map(getToolById).filter(Boolean))
 const activeTab = ref(popupTools[0] || '')
 const content = ref(null)
+
+// 当前语言（computed，随切换自动响应），切换后写入缓存
+const locale = currentLocale
+
+async function toggleLocale() {
+  await setLocale(locale.value === 'zh-CN' ? 'en-US' : 'zh-CN')
+}
 
 const currentTool = computed(() => getToolById(activeTab.value))
 
@@ -177,6 +187,12 @@ async function openOptions() {
 
 .icon-btn:hover {
   background: rgba(255, 255, 255, 0.25);
+}
+
+.lang-toggle {
+  font-size: 12px;
+  width: 34px;
+  font-weight: 600;
 }
 
 .content {

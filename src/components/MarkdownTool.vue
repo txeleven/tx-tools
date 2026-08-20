@@ -15,6 +15,8 @@
       <span class="spacer"></span>
       <button :disabled="!html" @click="copyOutput">{{ t('markdown.copyHtml') }}</button>
       <button :disabled="!html" @click="openPreview">{{ t('markdown.openWindow') }}</button>
+      <button :disabled="!input" @click="saveToCache">💾 {{ t('markdown.save') }}</button>
+      <button @click="historyVisible = true">🕘 {{ t('markdown.history') }}</button>
       <button @click="clear">🗑 {{ t('common.clear') }}</button>
     </div>
 
@@ -30,14 +32,40 @@
       <div class="markdown-body" v-html="html"></div>
       <div class="empty-hint" v-if="!input">{{ t('markdown.empty') }}</div>
     </div>
+
+    <!-- 历史记录弹窗 -->
+    <div v-if="historyVisible" class="md-overlay" @click.self="historyVisible = false">
+      <div class="md-modal">
+        <div class="md-modal-head">
+          <span>{{ t('markdown.historyTitle') }}</span>
+          <div class="md-modal-actions">
+            <button v-if="history.length" class="danger" @click="clearHistory">{{ t('common.clear') }}</button>
+            <button class="icon-btn" @click="historyVisible = false">×</button>
+          </div>
+        </div>
+        <div class="md-history-list">
+          <div v-if="!history.length" class="empty">{{ t('markdown.noHistory') }}</div>
+          <div v-for="r in history" :key="r.id" class="md-history-item" @click="loadRecord(r)">
+            <div class="md-history-title" :title="r.title">{{ r.title || t('markdown.untitled') }}</div>
+            <div class="md-history-time">{{ formatTime(r.timestamp) }}</div>
+            <button class="del-btn" @click.stop="removeRecord(r.id)">×</button>
+          </div>
+        </div>
+        <div class="md-modal-foot">
+          <button @click="historyVisible = false">{{ t('markdown.close') }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { marked } from 'marked'
 import { copyText } from '../utils/clipboard.js'
 import { useToast } from '../utils/useToast.js'
+import { confirmDialog } from '../utils/useConfirm.js'
+import { dbGetAll, dbPut, dbDelete, dbClear, STORE_MARKDOWN } from '../utils/db.js'
 import { t } from '../i18n/index.js'
 import LinedTextarea from './common/LinedTextarea.vue'
 
@@ -53,6 +81,19 @@ console.log('hello')
 `)
 const mode = ref('split')
 const { show } = useToast()
+
+// 历史记录（IndexedDB）
+const historyVisible = ref(false)
+const history = ref([])
+
+onMounted(async () => {
+  try {
+    const list = await dbGetAll(STORE_MARKDOWN)
+    history.value = list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+  } catch {
+    history.value = []
+  }
+})
 
 marked.setOptions({
   gfm: true,
@@ -76,6 +117,59 @@ const html = computed(() => {
 
 function clear() {
   input.value = ''
+}
+
+function makeTitle(text) {
+  const first = (text || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith('```'))
+  const title = (first || '')
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/[*_`>[\]-]/g, '')
+    .trim()
+  return title.slice(0, 40)
+}
+
+async function saveToCache() {
+  if (!input.value) return
+  const record = {
+    id: genId(),
+    timestamp: Date.now(),
+    title: makeTitle(input.value),
+    content: input.value,
+  }
+  await dbPut(STORE_MARKDOWN, record)
+  history.value.unshift(record)
+  show(t('common.success'))
+}
+
+function loadRecord(r) {
+  input.value = r.content
+  historyVisible.value = false
+  show(t('markdown.loaded'))
+}
+
+async function removeRecord(id) {
+  if (!(await confirmDialog(t('markdown.confirmDelete')))) return
+  history.value = history.value.filter((r) => r.id !== id)
+  await dbDelete(STORE_MARKDOWN, id)
+}
+
+async function clearHistory() {
+  if (!(await confirmDialog(t('markdown.confirmClear')))) return
+  history.value = []
+  await dbClear(STORE_MARKDOWN)
+}
+
+function formatTime(ts) {
+  const d = new Date(ts)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function genId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 async function copyOutput() {
@@ -176,5 +270,97 @@ ${html.value}
   color: var(--text-secondary);
   text-align: center;
   padding: 20px;
+}
+
+.md-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.md-modal {
+  width: min(560px, 90vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.md-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+}
+
+.md-modal-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.md-history-list {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 200px;
+}
+
+.md-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  cursor: pointer;
+  background: var(--bg);
+}
+
+.md-history-item:hover {
+  border-color: var(--primary);
+}
+
+.md-history-title {
+  flex: 1;
+  font-size: 13px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.md-history-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex: none;
+}
+
+.del-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 4px;
+  flex: none;
+}
+
+.del-btn:hover {
+  color: var(--danger);
+}
+
+.md-modal-foot {
+  display: flex;
+  justify-content: flex-end;
 }
 </style>

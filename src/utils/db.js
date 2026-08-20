@@ -1,10 +1,11 @@
 const DB_NAME = 'tx-toolbox'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 let dbPromise = null
 
 export const STORE_HISTORY = 'httpHistory'
 export const STORE_SAVED = 'httpSaved'
+export const STORE_MARKDOWN = 'markdownHistory'
 
 function openDb() {
   if (!dbPromise) {
@@ -21,6 +22,9 @@ function openDb() {
         }
         if (!db.objectStoreNames.contains(STORE_SAVED)) {
           db.createObjectStore(STORE_SAVED, { keyPath: 'id' })
+        }
+        if (!db.objectStoreNames.contains(STORE_MARKDOWN)) {
+          db.createObjectStore(STORE_MARKDOWN, { keyPath: 'id' })
         }
       }
       req.onsuccess = () => resolve(req.result)

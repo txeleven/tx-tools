@@ -44,7 +44,7 @@
       <div v-else class="empty-hint">{{ t('common.result') }}</div>
     </div>
 
-    <div class="code-section">
+    <div class="code-section" :class="{ expanded }">
       <div class="code-header">
         <span class="code-title">🧰 {{ t('crypto.codeTitle') }}</span>
         <div class="code-tabs">
@@ -60,6 +60,9 @@
         </div>
         <span class="spacer"></span>
         <button @click="copyCode">{{ t('common.copy') }}</button>
+        <button class="expand-btn" @click="toggleExpand" :title="t(expanded ? 'crypto.collapse' : 'crypto.expand')">
+          {{ expanded ? '⤡' : '⤢' }}
+        </button>
       </div>
       <div class="code-body">
         <LinesBox :text="codeText" class="code-lines">
@@ -71,7 +74,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { encrypt as cryptoEncrypt, decrypt as cryptoDecrypt } from '../tools/crypto.js'
 import { getCryptoCode, codeLangs } from '../tools/cryptoCode.js'
 import { highlight } from '../tools/syntaxHighlight.js'
@@ -88,6 +91,7 @@ const output = ref('')
 const status = ref('')
 const statusClass = ref('')
 const codeLang = ref('js')
+const expanded = ref(false)
 const { show } = useToast()
 
 const codeHlLang = computed(() => {
@@ -102,6 +106,17 @@ watch(algorithm, () => {
   codeLang.value = 'js'
   setStatus('', '')
 })
+
+function toggleExpand() {
+  expanded.value = !expanded.value
+}
+
+function onKeydown(e) {
+  if (e.key === 'Escape' && expanded.value) expanded.value = false
+}
+
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
 function setStatus(msg, cls) {
   status.value = msg
@@ -215,6 +230,36 @@ async function copyCode() {
   min-height: 140px;
   display: flex;
   flex-direction: column;
+}
+
+.code-section.expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg);
+  border: none;
+  border-radius: 0;
+  padding: 14px;
+  min-height: 0;
+}
+
+/* 与字符串编解码工具一致的放大按钮 */
+.expand-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+
+.expand-btn:hover {
+  opacity: 1;
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .code-header {

@@ -1,5 +1,5 @@
 <template>
-  <div class="lined-textarea" :style="minHeight ? { minHeight } : {}">
+  <div ref="rootEl" class="lined-textarea" :style="minHeight ? { minHeight } : {}">
     <div class="lt-gutter" ref="gutter" aria-hidden="true">{{ gutterText }}</div>
     <textarea
       ref="area"
@@ -26,6 +26,8 @@ const props = defineProps({
   placeholder: { type: String, default: '' },
   readonly: { type: Boolean, default: false },
   minHeight: { type: String, default: '' },
+  // 传入则记忆用户上下拖动的高度，下次恢复
+  resizeKey: { type: String, default: '' },
 })
 const emit = defineEmits(['update:modelValue', 'input'])
 
@@ -34,6 +36,7 @@ function onInput(e) {
   emit('input', e)
 }
 
+const rootEl = ref(null)
 const gutter = ref(null)
 const area = ref(null)
 const mirror = ref(null)
@@ -48,36 +51,90 @@ const mirrorLines = computed(() => {
   return lines.map((l) => (l.length ? l : NBSP))
 })
 
+let recalcScheduled = false
+let recalcing = false
+let lastAreaWidth = -1
+
+function scheduleRecalc() {
+  if (recalcScheduled || recalcing) return
+  recalcScheduled = true
+  requestAnimationFrame(() => {
+    recalcScheduled = false
+    void recalcGutter()
+  })
+}
+
 async function recalcGutter() {
-  await nextTick()
-  const ta = area.value
-  const mir = mirror.value
-  if (!ta || !mir) return
-  mir.style.width = ta.clientWidth + 'px'
-  const lh = parseFloat(getComputedStyle(ta).lineHeight)
-  const kids = mir.children
-  let out = ''
-  for (let i = 0; i < kids.length; i++) {
-    const wraps = Math.max(1, Math.round(kids[i].offsetHeight / lh))
-    out += (i ? '\n' : '') + (i + 1)
-    for (let k = 1; k < wraps; k++) out += '\n'
+  if (recalcing) return
+  recalcing = true
+  try {
+    await nextTick()
+    const ta = area.value
+    const mir = mirror.value
+    if (!ta || !mir) return
+    const w = ta.clientWidth
+    if (mir.style.width !== w + 'px') mir.style.width = w + 'px'
+    const lh = parseFloat(getComputedStyle(ta).lineHeight)
+    const kids = mir.children
+    let out = ''
+    for (let i = 0; i < kids.length; i++) {
+      const wraps = Math.max(1, Math.round(kids[i].offsetHeight / lh))
+      out += (i ? '\n' : '') + (i + 1)
+      for (let k = 1; k < wraps; k++) out += '\n'
+    }
+    if (out !== gutterText.value) gutterText.value = out || '1'
+  } finally {
+    recalcing = false
   }
-  gutterText.value = out || '1'
 }
 
 let ro = null
+let resizeRO = null
+let resizeTimer = null
+let lastResizeH = -1
+const RESIZE_PREFIX = 'dev-toolbox-resize-'
+
 onMounted(() => {
-  recalcGutter()
+  lastAreaWidth = area.value ? area.value.clientWidth : -1
+  scheduleRecalc()
   if (typeof ResizeObserver !== 'undefined' && area.value) {
-    ro = new ResizeObserver(recalcGutter)
+    // 仅宽度变化才重算行号（折行只与宽度/内容有关；高度变化不重算，避免拖动分隔条时卡死）
+    ro = new ResizeObserver(() => {
+      const ta = area.value
+      if (!ta) return
+      const w = ta.clientWidth
+      if (w === lastAreaWidth) return
+      lastAreaWidth = w
+      scheduleRecalc()
+    })
     ro.observe(area.value)
+  }
+  // 记忆上下拖动的高度：恢复上次 + 监听变化后保存（防抖）
+  if (props.resizeKey && rootEl.value && typeof ResizeObserver !== 'undefined') {
+    try {
+      const saved = Number(localStorage.getItem(RESIZE_PREFIX + props.resizeKey))
+      if (saved >= 50 && saved <= 4000) rootEl.value.style.height = saved + 'px'
+    } catch {}
+    resizeRO = new ResizeObserver(() => {
+      if (!rootEl.value) return
+      const h = rootEl.value.offsetHeight
+      if (h === lastResizeH) return // 高度没变（如仅宽度变化）不处理
+      lastResizeH = h
+      clearTimeout(resizeTimer)
+      resizeTimer = setTimeout(() => {
+        try { localStorage.setItem(RESIZE_PREFIX + props.resizeKey, String(h)) } catch {}
+      }, 300)
+    })
+    resizeRO.observe(rootEl.value)
   }
 })
 onBeforeUnmount(() => {
   if (ro) ro.disconnect()
+  if (resizeRO) resizeRO.disconnect()
+  clearTimeout(resizeTimer)
 })
 
-watch(() => props.modelValue, recalcGutter, { flush: 'post' })
+watch(() => props.modelValue, scheduleRecalc, { flush: 'post' })
 
 function syncScroll() {
   if (gutter.value && area.value) gutter.value.scrollTop = area.value.scrollTop

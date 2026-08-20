@@ -32,6 +32,20 @@
       </button>
     </div>
 
+    <div class="dt-check">
+      <span class="label-sm">{{ t('regex.dateTime') }}:</span>
+      <input
+        v-model="dtInput"
+        :placeholder="t('regex.dateTimePlaceholder')"
+        class="mono dt-input"
+        spellcheck="false"
+        @input="checkDateTime()"
+        @keyup.enter="checkDateTime(true)"
+      />
+      <button @click="checkDateTime(true)">{{ t('regex.dateTimeCheck') }}</button>
+    </div>
+    <div v-if="dtResult" class="status" :class="dtResult.ok ? 'ok' : 'err'">{{ dtResult.msg }}</div>
+
     <LinedTextarea
       v-model="testText"
       :placeholder="t('regex.testText')"
@@ -91,6 +105,8 @@ const testText = ref('')
 const error = ref('')
 const matchCount = ref(0)
 const usageLang = ref('js')
+const dtInput = ref('')
+const dtResult = ref('')
 
 const presets = [
   { label: t('regex.email'), key: 'email', re: '[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)+' },
@@ -119,6 +135,46 @@ const usageLangs = [
 function applyPreset(p) {
   pattern.value = p.re
   run()
+}
+
+// 解析 YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD，可选 [ T]HH:mm[:ss]
+function parseDateTime(text) {
+  const m = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/)
+  if (!m) return null
+  return {
+    y: +m[1],
+    mo: +m[2],
+    d: +m[3],
+    h: m[4] === undefined ? 0 : +m[4],
+    mi: m[5] === undefined ? 0 : +m[5],
+    s: m[6] === undefined ? 0 : +m[6],
+  }
+}
+
+// 校验日期时间是否真实存在（闰年 / 各月天数 / 时分秒范围）
+function checkDateTime(strict = false) {
+  const text = dtInput.value.trim()
+  if (!text) {
+    dtResult.value = ''
+    return
+  }
+  const p = parseDateTime(text)
+  if (!p) {
+    dtResult.value = strict ? { ok: false, msg: t('regex.dateTimeInvalidFormat') } : ''
+    return
+  }
+  const fail = (msg) => {
+    dtResult.value = { ok: false, msg }
+  }
+  if (p.y < 1) return fail(t('regex.dateTimeYear'))
+  if (p.mo < 1 || p.mo > 12) return fail(t('regex.dateTimeMonth'))
+  const dim = new Date(Date.UTC(p.y, p.mo, 0)).getUTCDate()
+  if (p.d < 1 || p.d > dim) return fail(t('regex.dateTimeDay', { day: p.d }))
+  if (p.h > 23) return fail(t('regex.dateTimeHour'))
+  if (p.mi > 59) return fail(t('regex.dateTimeMinute'))
+  if (p.s > 59) return fail(t('regex.dateTimeSecond'))
+  const weekday = t(`regex.weekday.${new Date(Date.UTC(p.y, p.mo - 1, p.d)).getUTCDay()}`)
+  dtResult.value = { ok: true, msg: t('regex.dateTimeValid', { weekday }) }
 }
 
 function run() {
@@ -172,24 +228,25 @@ function pyFlags() {
   return [...(flags.value || '')].filter((f) => map[f]).map((f) => map[f]).join('|')
 }
 
-function phpPattern() {
-  return `/${pattern.value.replace(/\//g, '\\/')}/${phpFlags()}`
+function phpPattern(pat) {
+  return `/${pat.replace(/\//g, '\\/')}/${phpFlags()}`
 }
 
-function pyPattern() {
+function pyPattern(pat) {
   // 优先用单引号原始字符串；含单引号时改用双引号
-  const hasSingle = pattern.value.includes("'")
-  const hasDouble = pattern.value.includes('"')
+  const hasSingle = pat.includes("'")
+  const hasDouble = pat.includes('"')
   const q = hasSingle && !hasDouble ? '"' : "'"
-  return `r${q}${pattern.value}${q}`
+  return `r${q}${pat}${q}`
 }
 
 // 生成各语言使用方法示例（随正则/flags 实时更新）
+// 正则为空时用占位正则展示示例，保证调用示例代码始终可见
 const usageExamples = computed(() => {
-  if (!pattern.value) return []
+  const pat = pattern.value || 'example'
   const s = sample()
   if (usageLang.value === 'php') {
-    const p = phpPattern()
+    const p = phpPattern(pat)
     const examples = [
       {
         title: t('regex.usageTest'),
@@ -207,7 +264,7 @@ const usageExamples = computed(() => {
     return examples.map((e) => ({ ...e, html: highlight(e.text, 'php') }))
   }
   if (usageLang.value === 'py') {
-    const p = pyPattern()
+    const p = pyPattern(pat)
     const fl = pyFlags()
     const flArg = fl ? `, ${fl}` : ''
     const examples = [
@@ -226,7 +283,7 @@ const usageExamples = computed(() => {
     ]
     return examples.map((e) => ({ ...e, html: highlight(e.text, 'python') }))
   }
-  const lit = `/${pattern.value}/${flags.value || ''}`
+  const lit = `/${pat}/${flags.value || ''}`
   const examples = [
     {
       title: t('regex.usageTest'),
@@ -281,6 +338,18 @@ async function copyUsage(code) {
 .preset {
   padding: 3px 8px;
   font-size: 12px;
+}
+
+.dt-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dt-input {
+  flex: 1;
+  min-width: 220px;
 }
 
 .regex-result {

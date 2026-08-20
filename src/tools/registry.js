@@ -2,20 +2,18 @@ import { defineAsyncComponent } from 'vue'
 
 // 按需加载组件，避免 popup/options 首包包含全部工具代码
 export const categories = [
+  { id: 'encoding', key: 'nav.encoding' },
   { id: 'code', key: 'nav.code' },
   { id: 'network', key: 'nav.network' },
-  { id: 'encoding', key: 'nav.encoding' },
   { id: 'crypto', key: 'nav.crypto' },
   { id: 'text', key: 'nav.text' },
   { id: 'generate', key: 'nav.generate' },
 ]
 
 export const tools = [
-  { id: 'beautify', icon: '✨', nameKey: 'tools.beautify.name', category: 'code', component: defineAsyncComponent(() => import('../components/CodeBeautifyTool.vue')), props: {} },
   { id: 'jsonDiff', icon: '🔀', nameKey: 'tools.jsonDiff.name', category: 'code', component: defineAsyncComponent(() => import('../components/JsonDiffTool.vue')), props: {} },
 
   { id: 'stringCodec', icon: '🔤', nameKey: 'tools.stringCodec.name', category: 'encoding', component: defineAsyncComponent(() => import('../components/StringCodecTool.vue')), props: {} },
-  { id: 'htmlCodec', icon: '🌐', nameKey: 'tools.htmlCodec.name', category: 'encoding', component: defineAsyncComponent(() => import('../components/HtmlTool.vue')), props: {} },
   { id: 'imageBase64', icon: '🖼️', nameKey: 'tools.imageBase64.name', category: 'encoding', component: defineAsyncComponent(() => import('../components/ImageToBase64Tool.vue')), props: {} },
 
   { id: 'hash', icon: '#️⃣', nameKey: 'tools.hash.name', category: 'crypto', component: defineAsyncComponent(() => import('../components/HashTool.vue')), props: {} },

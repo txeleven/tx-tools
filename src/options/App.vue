@@ -25,6 +25,18 @@
           </button>
         </div>
       </nav>
+
+      <!-- 侧边栏底部：语言切换 -->
+      <div class="sidebar-footer">
+        <div class="lang-switch" :title="t('settings.language')">
+          <button class="lang-btn" :class="{ active: locale === 'zh-CN' }" @click="changeLocale('zh-CN')">
+            中文
+          </button>
+          <button class="lang-btn" :class="{ active: locale === 'en-US' }" @click="changeLocale('en-US')">
+            EN
+          </button>
+        </div>
+      </div>
     </aside>
 
     <!-- 拖拽分隔条 -->
@@ -56,7 +68,7 @@
 <script setup>
 import { ref, computed, watchEffect, watch, nextTick } from 'vue'
 import { categories, optionTools, getToolById } from '../tools/registry.js'
-import { t } from '../i18n/index.js'
+import { t, currentLocale, setLocale } from '../i18n/index.js'
 import { toastState } from '../utils/useToast.js'
 import { restoreHeights, bindHeightMemory } from '../utils/resizeMemory.js'
 import ConfirmDialog from '../components/common/ConfirmDialog.vue'
@@ -71,6 +83,13 @@ const ready = ref(false)
 const sidebarWidth = ref(220)
 const resizing = ref(false)
 const toolContainer = ref(null)
+
+// 当前语言（computed，随切换自动响应）
+const locale = currentLocale
+
+async function changeLocale(loc) {
+  await setLocale(loc)
+}
 
 async function loadSidebarWidth() {
   const w = await getItem(SIDEBAR_WIDTH_KEY)
@@ -281,6 +300,41 @@ function toolsByCategory(catId) {
 .tool-icon {
   width: 18px;
   text-align: center;
+}
+
+.sidebar-footer {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.lang-switch {
+  display: flex;
+  gap: 6px;
+}
+
+.lang-btn {
+  flex: 1;
+  padding: 5px 0;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.lang-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.lang-btn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
 }
 
 .main {
