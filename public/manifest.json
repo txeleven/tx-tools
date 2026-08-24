@@ -36,6 +36,23 @@
   "background": {
     "service_worker": "background/service-worker.js"
   },
+  "content_scripts": [
+    {
+      "id": "tx-sniffer-main",
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content-scripts/sniffer-main.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "id": "tx-sniffer-bridge",
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content-scripts/sniffer-bridge.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
   }

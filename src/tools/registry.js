@@ -40,6 +40,7 @@ export const tools = [
   { id: 'perf', icon: '⏱️', nameKey: 'tools.perf.name', category: 'page', popupOnly: true, component: defineAsyncComponent(() => import('../components/PerfTool.vue')), props: {} },
 
   { id: 'http', icon: '🌐', nameKey: 'tools.http.name', category: 'network', component: defineAsyncComponent(() => import('../components/HttpTool.vue')), props: {} },
+  { id: 'sniffer', icon: '🕸️', nameKey: 'tools.sniffer.name', category: 'network', component: defineAsyncComponent(() => import('../components/SnifferTool.vue')), props: {} },
 ]
 
 export const popupTools = [

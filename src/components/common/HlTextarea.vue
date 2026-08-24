@@ -2,7 +2,7 @@
   <div class="hl-textarea" :class="{ fill }" :style="minHeight ? { minHeight } : {}">
     <div class="lt-gutter" ref="gutter" aria-hidden="true">{{ gutterText }}</div>
     <div class="hl-body">
-      <pre ref="hl" class="hl-layer" aria-hidden="true" v-html="highlighted"></pre>
+      <pre ref="hl" class="hl-layer" aria-hidden="true">{{ modelValue }}</pre>
       <textarea
         ref="area"
         class="lt-area"
@@ -23,7 +23,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { highlight } from '../../tools/syntaxHighlight.js'
+import { getHighlightTokens } from '../../tools/syntaxHighlight.js'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
@@ -40,16 +40,42 @@ function onInput(e) {
   emit('input', e)
 }
 
-const highlighted = computed(() => {
-  if (!props.language) return ''
-  return highlight(props.modelValue || '', props.language)
-})
-
 const gutter = ref(null)
 const area = ref(null)
 const hl = ref(null)
 const mirror = ref(null)
 const gutterText = ref('1')
+
+// CSS Custom Highlight API：不改 DOM（纯文本节点，断行与输入层一致），用 Range 给 token 上色
+const highlightSupported = typeof CSS !== 'undefined' && !!CSS.highlights && typeof Highlight !== 'undefined'
+const registeredTypes = new Set()
+
+async function applyHighlights() {
+  const el = hl.value
+  if (!el) return
+  if (highlightSupported) {
+    for (const t of registeredTypes) CSS.highlights.delete(t)
+    registeredTypes.clear()
+  }
+  await nextTick()
+  if (!highlightSupported || !props.language) return
+  const textNode = el.firstChild
+  if (!textNode || textNode.nodeType !== 3 || !textNode.length) return
+  const tokens = getHighlightTokens(props.modelValue || '', props.language)
+  const byType = new Map()
+  for (const t of tokens) {
+    if (t.start >= textNode.length) continue
+    const range = new Range()
+    range.setStart(textNode, t.start)
+    range.setEnd(textNode, Math.min(t.end, textNode.length))
+    if (!byType.has(t.type)) byType.set(t.type, [])
+    byType.get(t.type).push(range)
+  }
+  for (const [type, ranges] of byType) {
+    CSS.highlights.set(type, new Highlight(...ranges))
+    registeredTypes.add(type)
+  }
+}
 
 const NBSP = ' '
 const mirrorLines = computed(() => {
@@ -82,6 +108,7 @@ async function recalc() {
 let ro = null
 onMounted(() => {
   recalc()
+  applyHighlights()
   if (typeof ResizeObserver !== 'undefined' && area.value) {
     ro = new ResizeObserver(recalc)
     ro.observe(area.value)
@@ -89,10 +116,18 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (ro) ro.disconnect()
+  if (highlightSupported) {
+    for (const t of registeredTypes) CSS.highlights.delete(t)
+    registeredTypes.clear()
+  }
 })
 
-watch(() => props.modelValue, recalc, { flush: 'post' })
-watch(() => props.language, recalc, { flush: 'post' })
+function refresh() {
+  recalc()
+  applyHighlights()
+}
+watch(() => props.modelValue, refresh, { flush: 'post' })
+watch(() => props.language, refresh, { flush: 'post' })
 
 function syncScroll() {
   if (gutter.value && area.value) gutter.value.scrollTop = area.value.scrollTop
@@ -153,6 +188,8 @@ function syncScroll() {
   min-height: 0;
   position: relative;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .hl-layer {
@@ -166,18 +203,21 @@ function syncScroll() {
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.6;
+  letter-spacing: normal;
+  tab-size: 4;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   overflow: hidden;
   pointer-events: none;
   color: var(--text);
 }
 
+
 .lt-area {
-  position: absolute;
-  inset: 0;
+  flex: 1;
   width: 100%;
-  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -185,10 +225,13 @@ function syncScroll() {
   caret-color: var(--text);
   resize: none;
   white-space: pre-wrap;
+  overflow-wrap: break-word;
   overflow: auto;
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.6;
+  letter-spacing: normal;
+  tab-size: 4;
   padding: 8px 10px;
   z-index: 1;
 }
@@ -219,9 +262,11 @@ function syncScroll() {
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.6;
+  letter-spacing: normal;
+  tab-size: 4;
   padding: 8px 10px;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   box-sizing: border-box;
 }
 </style>

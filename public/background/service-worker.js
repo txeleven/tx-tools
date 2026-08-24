@@ -58,6 +58,31 @@ chrome.runtime.onInstalled.addListener(() => {
       })
     })
   })
+  registerSniffer()
+})
+
+// ---------- 网络请求嗅探：注册主世界内容脚本 ----------
+// 在页面主世界拦截 fetch/XHR，供 popup 读取当前页面已发出的请求
+async function registerSniffer() {
+  if (!chrome.scripting || !chrome.scripting.registerContentScripts) return
+  try {
+    await chrome.scripting.registerContentScripts([
+      {
+        id: 'tx-sniffer-main',
+        matches: ['http://*/*', 'https://*/*'],
+        js: ['content-scripts/sniffer-main.js'],
+        runAt: 'document_start',
+        world: 'MAIN',
+        allFrames: false,
+      },
+    ])
+  } catch (e) {
+    // 已注册过同 id 时忽略
+  }
+}
+
+chrome.runtime.onStartup.addListener(() => {
+  registerSniffer()
 })
 
 // ---------- Offscreen 剪贴板 ----------
@@ -120,5 +145,33 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === 'copy-done') {
     sendResponse({ received: true })
+    return
+  }
+
+  // ---------- 抓包数据读写（常驻后台，跨页面持久） ----------
+  if (msg?.type === 'tx-get-captured') {
+    const key = msg.key || 'tx-captured-requests'
+    chrome.storage.local.get(key, (res) => {
+      const list = res[key] || []
+      // 可选按 host 过滤
+      const filtered = msg.host ? list.filter((r) => r.host === msg.host) : list
+      sendResponse({ ok: true, list: filtered })
+    })
+    return true // 异步响应
+  }
+  if (msg?.type === 'tx-clear-captured') {
+    const key = msg.key || 'tx-captured-requests'
+    chrome.storage.local.set({ [key]: [] }, () => sendResponse({ ok: true }))
+    return true
+  }
+  // 按 host 删除（清除当前页面的抓包）
+  if (msg?.type === 'tx-clear-host') {
+    const key = msg.key || 'tx-captured-requests'
+    chrome.storage.local.get(key, (res) => {
+      const list = res[key] || []
+      const next = msg.host ? list.filter((r) => r.host !== msg.host) : list
+      chrome.storage.local.set({ [key]: next }, () => sendResponse({ ok: true }))
+    })
+    return true
   }
 })

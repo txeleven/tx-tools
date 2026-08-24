@@ -209,6 +209,7 @@
             <button :class="{ active: responseTab === 'body' }" @click="responseTab = 'body'">{{ t('http.responseBody') }}</button>
             <button :class="{ active: responseTab === 'headers' }" @click="responseTab = 'headers'">{{ t('http.responseHeaders') }}</button>
             <button :class="{ active: responseTab === 'cookie' }" @click="responseTab = 'cookie'">Cookie</button>
+            <button :class="{ active: responseTab === 'raw' }" @click="responseTab = 'raw'">{{ t('http.responseRaw') }}</button>
           </div>
           <LinesBox v-if="responseTab === 'body'" :text="formattedResponseBody" class="response-body-lines">
             <pre class="response-body" v-html="highlightedResponseBody"></pre>
@@ -219,6 +220,9 @@
                 <span class="h-key">{{ key }}:</span> {{ value }}
               </div>
             </div>
+          </LinesBox>
+          <LinesBox v-else-if="responseTab === 'raw'" :text="rawResponseText" class="response-body-lines">
+            <pre class="response-body response-raw">{{ rawResponseText }}</pre>
           </LinesBox>
           <LinesBox v-else :text="responseCookiesText" class="response-headers-lines">
             <div class="response-headers">
@@ -383,6 +387,7 @@ const { show } = useToast()
 const history = ref([])
 const saved = ref([])
 const SIDEBAR_TAB_KEY = 'dev-toolbox-http-sidebar-tab'
+const PENDING_REQUEST_KEY = 'dev-toolbox-pending-http-request'
 const sidebar = ref('history')
 const selectedId = ref(null)
 const saveName = ref('')
@@ -609,6 +614,18 @@ const responseHeadersText = computed(() => {
     .join('\n')
 })
 
+// 原始响应：状态行 + 响应头 + 空行 + 未格式化的原始 body
+const rawResponseText = computed(() => {
+  if (!response.value) return ''
+  const r = response.value
+  const statusLine = `HTTP ${r.status} ${r.statusText || ''}`.trim()
+  const headers = Object.entries(r.headers || {})
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\n')
+  const body = r.body || ''
+  return `${statusLine}\n${headers}\n\n${body}`
+})
+
 const responseCookies = computed(() => {
   if (!response.value || !response.value.headers) return []
   const setCookie = response.value.headers['set-cookie']
@@ -703,6 +720,28 @@ onMounted(async () => {
   if (w >= 180 && w <= 480) sidebarWidth.value = w
   const savedTab = await getItem(SIDEBAR_TAB_KEY)
   if (savedTab === 'history' || savedTab === 'saved') sidebar.value = savedTab
+  // 处理从 popup 抓包发来的待预置请求（预置 method/url/headers/params/body 后清除）
+  const pendingRaw = await getItem(PENDING_REQUEST_KEY)
+  if (pendingRaw) {
+    try {
+      const req = typeof pendingRaw === 'string' ? JSON.parse(pendingRaw) : pendingRaw
+      if (req && req.url) {
+        loadRecord({
+          method: req.method || 'GET',
+          url: req.url,
+          headers: req.headers,
+          queryParams: req.queryParams,
+          bodyMode: req.bodyMode || 'none',
+          body: req.body || '',
+          formBody: req.formBody,
+        })
+        selectedId.value = null
+      }
+    } catch (e) {
+      // 解析失败忽略
+    }
+    setItem(PENDING_REQUEST_KEY, '')
+  }
 })
 
 onBeforeUnmount(() => {
@@ -1947,6 +1986,12 @@ function genId() {
   word-break: normal;
   font-family: var(--mono);
   font-size: 12.5px;
+}
+
+.response-raw {
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: break-word;
 }
 
 .response-headers-lines {

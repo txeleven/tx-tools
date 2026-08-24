@@ -380,3 +380,14 @@ body.resizing-row {
 .hl-attr { color: #e36209; }
 .hl-property { color: #e36209; }
 .hl-var { color: #9a6700; }
+
+/* Custom Highlight API（HlTextarea 用，::highlight 不支持 font-weight 等布局属性，仅设颜色以保证折行一致） */
+::highlight(hl-kw) { color: #cf222e; }
+::highlight(hl-str) { color: #0a7a37; }
+::highlight(hl-num) { color: #0550ae; }
+::highlight(hl-func) { color: #8250df; }
+::highlight(hl-comment) { color: #6a737d; }
+::highlight(hl-tag) { color: #22863a; }
+::highlight(hl-attr) { color: #e36209; }
+::highlight(hl-property) { color: #e36209; }
+::highlight(hl-var) { color: #9a6700; }
