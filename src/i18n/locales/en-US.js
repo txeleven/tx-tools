@@ -351,6 +351,7 @@ export default {
     snifferFetch: 'Capture requests',
     snifferEmpty: 'No requests captured. Interact with the page, then refresh.',
     snifferFail: 'Capture failed. Please refresh the page and retry.',
+    snifferStale: 'Outdated sniffer script still running. Refresh the page to restore status codes.',
     snifferNoTab: 'No active tab found',
     snifferSearch: 'Search requests (URL / method)',
     snifferNoMatch: 'No matching requests',
@@ -359,7 +360,10 @@ export default {
     snifferOpenDetail: 'Open full captured list',
     snifferEnabled: 'Sniffing on',
     snifferDisabled: 'Sniffing off',
+    snifferOffTip: 'Sniffing is off. Turn it on to capture.',
     snifferClear: 'Clear this page\'s requests',
+    snifferDetail: 'View full request & response',
+    snifferNoResBody: 'Not responded yet, or response body unreadable (binary/stream)',
     sendToHttp: 'Send to HTTP tool',
   },
   image: {

@@ -4,10 +4,13 @@
 // （sniffer-bridge.js），由后者写入 chrome.storage.local 实现常驻后台持久化。
 // 同时保留 window.__txCapturedRequests 内存数组，供 popup 通过 executeScript 快速读取。
 ;(function () {
+  // 版本号：popup/options 注入时检测旧版拦截残留（扩展更新后未刷新页面），并提示用户刷新
   if (window.__txSnifferInstalled) return
   window.__txSnifferInstalled = true
+  window.__txSnifferVersion = 2
 
   const MEM_MAX = 200 // 内存保留条数（popup 快速读取用）
+  const RES_MAX = 32 * 1024 // 响应体保留上限（32KB），超长截断，避免 storage 超配额
   const store = (window.__txCapturedRequests = window.__txCapturedRequests || [])
   let seq = Date.now() // 自增 id，用于请求与响应状态码关联
 
@@ -24,22 +27,42 @@
     return req.id
   }
 
-  // 响应返回后补状态码（同步内存 + 上报 bridge 更新 storage）
-  function reportStatus(id, status) {
+  // 响应返回后补充信息（状态码 / 响应头 / 响应体，同步内存 + 上报 bridge 更新 storage）
+  // 未传的字段保持原样，便于先补状态、再异步补响应体
+  function reportResult(id, status, resHeaders, resBody) {
     if (!id) return
     try {
       const rec = store.find((r) => r.id === id)
-      if (rec) rec.status = status
+      if (rec) {
+        if (status !== undefined) rec.status = status
+        if (resHeaders !== undefined) rec.resHeaders = resHeaders
+        if (resBody !== undefined) rec.resBody = resBody
+      }
     } catch (e) {}
     try {
-      window.postMessage({ __txCaptureUpdate: true, id, status }, '*')
+      window.postMessage({ __txCaptureUpdate: true, id, status, resHeaders, resBody }, '*')
     } catch (e) {}
+  }
+
+  // 截断超长响应体
+  function truncateBody(s) {
+    if (!s || s.length <= RES_MAX) return s
+    return s.slice(0, RES_MAX) + '\n…[truncated]'
   }
 
   // 通知 bridge 立即把缓冲落盘到 storage（popup/options 打开时调用，保证数据立即可读）
   window.__txSnifferFlush = function () {
     try {
       window.postMessage({ __txCaptureFlush: true }, '*')
+    } catch (e) {}
+  }
+
+  // 清空抓包：清空页面内存 + 通知 bridge 清空缓冲
+  // （仅清 storage 不够——自动刷新会从页面内存/缓冲重新读回旧数据）
+  window.__txSnifferClear = function () {
+    try { store.length = 0 } catch (e) {}
+    try {
+      window.postMessage({ __txCaptureClear: true }, '*')
     } catch (e) {}
   }
 
@@ -126,12 +149,38 @@
           })
         }
       } catch (e) {}
-      const p = origFetch.apply(this, arguments)
+      let p
       try {
-        if (reqId) {
+        p = origFetch.apply(this, arguments)
+      } catch (err) {
+        // 原 fetch 抛异常：保持页面原有语义（继续抛），但已记录的请求标记为失败
+        if (reqId) reportResult(reqId, 0)
+        throw err
+      }
+      try {
+        if (reqId && p && typeof p.then === 'function') {
           p.then(
-            (res) => reportStatus(reqId, res && res.status),
-            () => reportStatus(reqId, 0) // 网络层失败
+            (res) => {
+              const status = res && res.status
+              // 响应头可同步拿到；响应体需 clone 后异步读取（不阻塞原响应流）
+              let resHeaders
+              try {
+                if (res && typeof Headers !== 'undefined' && res.headers && typeof res.headers.forEach === 'function') {
+                  resHeaders = headersToObj(res.headers)
+                }
+              } catch (e) {}
+              reportResult(reqId, status, resHeaders)
+              try {
+                if (res && typeof res.clone === 'function') {
+                  res
+                    .clone()
+                    .text()
+                    .then((txt) => reportResult(reqId, undefined, undefined, truncateBody(txt == null ? '' : String(txt))))
+                    .catch(() => {})
+                }
+              } catch (e) {}
+            },
+            () => reportResult(reqId, 0) // 网络层失败
           )
         }
       } catch (e) {}
@@ -176,7 +225,27 @@
         const id = reqId
         this.addEventListener('loadend', function () {
           try {
-            reportStatus(id, this.status)
+            const status = this.status
+            // 响应头
+            let resHeaders
+            try {
+              const raw = this.getAllResponseHeaders ? this.getAllResponseHeaders() : ''
+              if (raw) {
+                resHeaders = {}
+                raw.trim().split(/\r?\n/).forEach((line) => {
+                  const idx = line.indexOf(':')
+                  if (idx > 0) resHeaders[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
+                })
+              }
+            } catch (e) {}
+            // 响应体（仅文本响应可读）
+            let resBody
+            try {
+              if (!this.responseType || this.responseType === 'text') {
+                resBody = typeof this.responseText === 'string' ? this.responseText : ''
+              }
+            } catch (e) {}
+            reportResult(id, status, resHeaders, resBody === undefined ? '' : truncateBody(resBody))
           } catch (e) {}
         })
       }

@@ -152,6 +152,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === 'tx-get-captured') {
     const key = msg.key || 'tx-captured-requests'
     chrome.storage.local.get(key, (res) => {
+      // 读取失败（配额异常等）时返回空列表，由前端用页面内存兜底
+      if (chrome.runtime.lastError) {
+        sendResponse({ ok: false, list: [] })
+        return
+      }
       const list = res[key] || []
       // 可选按 host 过滤
       const filtered = msg.host ? list.filter((r) => r.host === msg.host) : list
@@ -169,7 +174,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const key = msg.key || 'tx-captured-requests'
     chrome.storage.local.get(key, (res) => {
       const list = res[key] || []
-      const next = msg.host ? list.filter((r) => r.host !== msg.host) : list
+      // 兼容老数据缺少 r.host 的情况：同时匹配 r.host / r.domain / 从 url 解析的 host
+      const next = msg.host
+        ? list.filter((r) => {
+            const urlHost = (() => {
+              try {
+                return new URL(r.url || '').host
+              } catch {
+                return ''
+              }
+            })()
+            return r.host !== msg.host && r.domain !== msg.host && urlHost !== msg.host
+          })
+        : list
       chrome.storage.local.set({ [key]: next }, () => sendResponse({ ok: true }))
     })
     return true

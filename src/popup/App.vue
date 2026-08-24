@@ -71,7 +71,8 @@
             >
               <span class="sniffer-method" :data-m="r.method">{{ r.method }}</span>
               <span class="sniffer-status" :data-s="statusClass(r.status)">{{ r.status != null ? r.status : '…' }}</span>
-              <span class="sniffer-url">{{ fullUrl(r) }}</span>
+              <span class="sniffer-url">{{ pathUrl(r) }}</span>
+              <button class="sniffer-detail" @click.stop="openDetail(r)" :title="t('popup.snifferDetail')">⋯</button>
               <button class="sniffer-copy" @click.stop="copyUrl(r)" :title="t('common.copy')">⧉</button>
               <button class="sniffer-send" @click.stop="sendToHttp(r)" :title="t('popup.sendToHttp')">➤</button>
               <div v-if="hoverTip === i" class="sniffer-tip" :style="tipStyle">
@@ -112,12 +113,48 @@
       <div v-if="toastState.visible" class="toast">{{ toastState.message }}</div>
     </transition>
 
+    <!-- 抓包详情弹窗：点击列表 ⋯ 显示完整请求与返回信息 -->
+    <transition name="fade">
+      <div v-if="detailReq" class="sniffer-modal" @click.self="closeDetail">
+        <div class="sniffer-modal-panel">
+          <div class="sniffer-modal-head">
+            <span class="sniffer-method" :data-m="detailReq.method">{{ detailReq.method }}</span>
+            <span class="sniffer-status" :data-s="statusClass(detailReq.status)">{{ detailReq.status != null ? detailReq.status : '…' }}</span>
+            <span class="sniffer-modal-url" :title="fullUrl(detailReq)">{{ fullUrl(detailReq) }}</span>
+            <button class="sniffer-modal-close" @click="closeDetail">✕</button>
+          </div>
+          <div class="sniffer-modal-body">
+            <div class="sniffer-modal-sec">
+              <div class="sniffer-modal-sec-title">{{ t('http.headers') }}</div>
+              <pre class="sniffer-modal-pre">{{ formatHeaders(detailReq.headers) || '-' }}</pre>
+            </div>
+            <div class="sniffer-modal-sec" v-if="detailReq.body">
+              <div class="sniffer-modal-sec-title">{{ t('http.body') }}</div>
+              <pre class="sniffer-modal-pre">{{ detailReq.body }}</pre>
+            </div>
+            <div class="sniffer-modal-sec">
+              <div class="sniffer-modal-sec-title">{{ t('http.responseHeaders') }}</div>
+              <pre class="sniffer-modal-pre">{{ formatHeaders(detailReq.resHeaders) || '-' }}</pre>
+            </div>
+            <div class="sniffer-modal-sec" v-if="detailReq.resBody">
+              <div class="sniffer-modal-sec-title">{{ t('http.responseBody') }}</div>
+              <pre class="sniffer-modal-pre">{{ detailReq.resBody }}</pre>
+            </div>
+            <div class="sniffer-modal-sec" v-else>
+              <div class="sniffer-modal-sec-title">{{ t('http.responseBody') }}</div>
+              <div class="sniffer-modal-empty">{{ t('popup.snifferNoResBody') }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
     <ConfirmDialog />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, watchEffect, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, watchEffect, nextTick } from 'vue'
 import { popupTools, getToolById } from '../tools/registry.js'
 import { t, currentLocale, setLocale } from '../i18n/index.js'
 import { toastState, useToast } from '../utils/useToast.js'
@@ -166,6 +203,10 @@ onMounted(async () => {
   restoreHeights(content.value, activeTab.value)
   // 打开 popup 即自动加载抓包数量（不依赖手动点刷新/展开）
   loadRequests()
+})
+
+onBeforeUnmount(() => {
+  stopAutoRefresh()
 })
 
 watch(activeTab, async (id) => {
@@ -220,25 +261,69 @@ function showTip(i, e) {
 
 const tipStyle = computed(() => ({ top: tipPos.value.top + 'px', left: tipPos.value.left + 'px' }))
 
+// 抓包详情弹窗：点击 ⋯ 展示完整请求与返回信息
+const detailReq = ref(null)
+function openDetail(r) {
+  hoverTip.value = -1
+  detailReq.value = r
+}
+function closeDetail() {
+  detailReq.value = null
+}
+function formatHeaders(h) {
+  if (!h || typeof h !== 'object') return ''
+  const keys = Object.keys(h)
+  if (!keys.length) return ''
+  return keys.map((k) => `${k}: ${h[k]}`).join('\n')
+}
+
 // 按关键词筛选接口（匹配 URL 或方法）
 const filteredRequests = computed(() => {
   const q = snifferQuery.value.trim().toLowerCase()
   if (!q) return requests.value
   return requests.value.filter((r) => {
-    const url = (r.url || '').toLowerCase()
+    const full = fullUrl(r).toLowerCase() // 完整 url（含 domain）
+    const domain = (r.domain || '').toLowerCase()
     const method = (r.method || '').toLowerCase()
-    return url.includes(q) || method.includes(q)
+    return full.includes(q) || domain.includes(q) || method.includes(q)
   })
 })
 
 function toggleSniffer() {
   snifferOpen.value = !snifferOpen.value
-  if (snifferOpen.value && !requests.value.length) loadRequests()
+  if (snifferOpen.value) {
+    loadRequests()
+    startAutoRefresh()
+  } else {
+    stopAutoRefresh()
+  }
+}
+
+// 抓包列表实时刷新：最多 1 秒延迟（接口未响应先展示，状态码由 bridge 异步补全后下次刷新显示）
+let refreshTimer = null
+function startAutoRefresh() {
+  stopAutoRefresh()
+  refreshTimer = setInterval(() => {
+    if (snifferOpen.value) loadRequests()
+  }, 1000)
+}
+function stopAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
 }
 
 async function loadRequests() {
   if (typeof chrome === 'undefined' || !chrome.scripting?.executeScript) {
     snifferError.value = t('popup.snifferFail')
+    return
+  }
+  // 开关关闭时不抓包、不展示
+  if (!snifferEnabled.value) {
+    requests.value = []
+    snifferError.value = t('popup.snifferOffTip')
+    snifferLoading.value = false
     return
   }
   snifferLoading.value = true
@@ -265,6 +350,20 @@ async function loadRequests() {
       requests.value = []
       return
     }
+
+    // 1.5 检测旧版抓包拦截残留：扩展更新后未刷新页面时，页面里仍是旧版
+    //     fetch/XHR 拦截（__txSnifferInstalled 挡住新版注入），旧版无状态码上报，
+    //     此时提示用户刷新页面才能恢复状态码展示
+    try {
+      const [vr] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: 'MAIN',
+        func: () => ({ installed: !!window.__txSnifferInstalled, version: window.__txSnifferVersion || 0 }),
+      })
+      if (vr && vr.result && vr.result.installed && vr.result.version < 2) {
+        snifferError.value = t('popup.snifferStale')
+      }
+    } catch (e) {}
 
     // 2. 强制把内存缓冲落盘到 storage，并顺带读页面内存做兜底
     let memList = []
@@ -293,17 +392,26 @@ async function loadRequests() {
       storeList = res && Array.isArray(res.list) ? res.list : []
     } catch (e) {}
 
-    // 合并：以 storage 为主，补充内存里 storage 还没有的（按 time+url 判重）
-    const seen = new Set(storeList.map((r) => `${r.time}|${r.url}`))
+    // 合并：以 storage 为主，内存记录更实时（status/resBody 由响应异步补全），
+    // 与 storage 记录重合时双向字段补全（storage 缺的用内存补，内存缺的用 storage 补），
+    // 保证 status 在任意一侧有值时都能展示出来
+    const merged = new Map(storeList.map((r) => [`${r.time}|${r.url}`, r]))
     for (const r of memList) {
       const k = `${r.time}|${r.url}`
-      if (!seen.has(k)) {
-        storeList.push(r)
-        seen.add(k)
+      const ex = merged.get(k)
+      if (ex) {
+        if (r.status != null && ex.status == null) ex.status = r.status
+        else if (ex.status != null && r.status == null) r.status = ex.status
+        if (r.resHeaders && !ex.resHeaders) ex.resHeaders = r.resHeaders
+        if (r.resBody && !ex.resBody) ex.resBody = r.resBody
+        if (r.headers && !ex.headers) ex.headers = r.headers
+        if (r.body && !ex.body) ex.body = r.body
+      } else {
+        merged.set(k, r)
       }
     }
 
-    requests.value = storeList.slice(-100).reverse()
+    requests.value = [...merged.values()].slice(-100).reverse()
     if (!requests.value.length && !snifferError.value) {
       snifferError.value = t('popup.snifferEmpty')
     }
@@ -345,6 +453,39 @@ async function clearRequests() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
     const host = tab && tab.url ? safeHost(tab.url) : ''
+
+    // 先清空所有 http/https 标签页的内存与 bridge 缓冲（__txSnifferClear 会通知
+    // bridge 清 pending 并使代际号 +1，阻断进行中的 flush 把旧数据写回 storage）。
+    // 只清当前 tab 不够：其它同 host 标签页的 bridge 随时会把旧缓冲写回 storage。
+    let tabs = []
+    try {
+      tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] })
+    } catch (e) {}
+    await Promise.all(
+      (tabs || []).map(async (t) => {
+        if (!t.id) return
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: t.id },
+            world: 'MAIN',
+            files: ['content-scripts/sniffer-main.js'],
+          })
+        } catch (e) {}
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: t.id },
+            world: 'MAIN',
+            func: () => {
+              if (typeof window.__txSnifferClear === 'function') {
+                try { window.__txSnifferClear() } catch (e) {}
+              }
+            },
+          })
+        } catch (e) {}
+      })
+    )
+
+    // 最后清 storage（当前 host），此时各 tab 旧缓冲已丢弃，不会再被写回
     await chrome.runtime.sendMessage({
       type: 'tx-clear-host',
       key: 'tx-captured-requests',
@@ -409,6 +550,18 @@ function fullUrl(r) {
   if (!base) return u
   try {
     return new URL(u, base).href
+  } catch {
+    return u
+  }
+}
+
+// 列表默认显示去掉 domain 的路径（pathname + search + hash），相对路径原样返回
+function pathUrl(r) {
+  const u = r && r.url ? String(r.url) : ''
+  if (!/^https?:\/\//i.test(u)) return u || '/'
+  try {
+    const o = new URL(u)
+    return o.pathname + o.search + o.hash || '/'
   } catch {
     return u
   }
@@ -858,6 +1011,24 @@ async function openOptions() {
 .sniffer-status[data-s='clienterr'] { color: #cf222e; background: rgba(207, 34, 46, 0.12); }
 .sniffer-status[data-s='servererr'] { color: #cf222e; background: rgba(207, 34, 46, 0.2); }
 
+.sniffer-detail {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 6px;
+  width: 26px;
+  height: 24px;
+  padding: 0 7px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.sniffer-detail:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 .sniffer-copy {
   flex-shrink: 0;
   border: 1px solid var(--border);
@@ -905,5 +1076,115 @@ async function openOptions() {
 .sniffer-send:hover {
   border-color: var(--primary);
   background: var(--primary-soft);
+}
+
+/* ---- 抓包详情弹窗 ---- */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.15s;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.sniffer-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.sniffer-modal-panel {
+  width: 100%;
+  max-width: 480px;
+  max-height: 92vh;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sniffer-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.sniffer-modal-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.sniffer-modal-close {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  font-size: 14px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.sniffer-modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sniffer-modal-body {
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.sniffer-modal-sec {
+  margin-bottom: 12px;
+}
+.sniffer-modal-sec:last-child {
+  margin-bottom: 0;
+}
+
+.sniffer-modal-sec-title {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.sniffer-modal-pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.sniffer-modal-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 6px 0;
 }
 </style>

@@ -88,6 +88,7 @@ const query = ref('')
 const loading = ref(false)
 const error = ref('')
 const openIdx = ref(-1)
+const staleDetected = ref(false)
 const ENABLED_KEY = 'tx-sniffer-enabled'
 const enabled = ref(true)
 
@@ -144,41 +145,142 @@ async function readStorage() {
   }
 }
 
-async function load() {
-  loading.value = true
-  error.value = ''
+// 遍历所有 http/https 标签页：注入 sniffer（幂等）、触发 flush、读取页面内存。
+// 返回合并后的抓包数组（作为 storage 的兜底/补充，保证即使桥接落盘异常也能拿到数据）。
+async function collectFromTabs() {
+  if (typeof chrome === 'undefined' || !chrome.tabs?.query || !chrome.scripting?.executeScript) return []
+  const out = []
   try {
-    // 主动向当前活跃 tab 注入 sniffer 并强制 flush，确保最新请求已落盘
-    // （注入幂等；无法注入的页面静默跳过，不阻断读取）
-    if (typeof chrome !== 'undefined' && chrome.scripting?.executeScript && chrome.tabs) {
-      try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-        if (tab && tab.id) {
+    const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] })
+    await Promise.all(
+      (tabs || []).map(async (tab) => {
+        if (!tab.id) return
+        try {
           await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             world: 'MAIN',
             files: ['content-scripts/sniffer-main.js'],
           })
-          await chrome.scripting.executeScript({
+        } catch (e) { return }
+        // 检测旧版抓包拦截残留：扩展更新后未刷新页面时，页面里仍是旧版
+        // fetch/XHR 拦截（__txSnifferInstalled 挡住新版注入），旧版无状态码上报
+        try {
+          const [vr] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            world: 'MAIN',
+            func: () => ({ installed: !!window.__txSnifferInstalled, version: window.__txSnifferVersion || 0 }),
+          })
+          if (vr && vr.result && vr.result.installed && vr.result.version < 2) {
+            staleDetected.value = true
+          }
+        } catch (e) {}
+        try {
+          const [res] = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             world: 'MAIN',
             func: () => {
               if (typeof window.__txSnifferFlush === 'function') {
                 try { window.__txSnifferFlush() } catch (e) {}
               }
+              return (window.__txCapturedRequests || []).slice(-200)
             },
           })
-        }
-      } catch (e) {}
+          if (res && Array.isArray(res.result)) out.push(...res.result)
+        } catch (e) {}
+      })
+    )
+  } catch (e) {}
+  return out
+}
+
+// 合并 storage 与各 tab 内存（按 time+url+host 判重）。
+// 注意：不能按 id 判重——不同标签页若在同一毫秒加载，自增 id 会相同，
+// 会把不同页面的记录误合并成一条，导致其中一条的 status 丢失。
+// 内存记录更实时（status/resBody 由响应异步补全），与 storage 重合时双向字段补全，
+// 保证 status 在任意一侧有值时都能展示出来。
+function mergeCaptured(storeList, memList) {
+  const map = new Map()
+  for (const r of storeList) {
+    const k = `${r.time}|${r.url}|${r.host || r.domain || ''}`
+    if (!map.has(k)) map.set(k, r)
+  }
+  for (const r of memList) {
+    const k = `${r.time}|${r.url}|${r.host || r.domain || ''}`
+    const ex = map.get(k)
+    if (ex) {
+      if (r.status != null && ex.status == null) ex.status = r.status
+      else if (ex.status != null && r.status == null) r.status = ex.status
+      if (r.resHeaders && !ex.resHeaders) ex.resHeaders = r.resHeaders
+      if (r.resBody && !ex.resBody) ex.resBody = r.resBody
+      if (r.headers && !ex.headers) ex.headers = r.headers
+      if (r.body && !ex.body) ex.body = r.body
+    } else {
+      map.set(k, r)
     }
-    const data = await readStorage()
-    list.value = data.slice(-500).reverse()
+  }
+  return [...map.values()]
+}
+
+// 轻量刷新：读 storage + 各 tab 内存合并（定时器用）
+async function refresh() {
+  try {
+    const [storeData, memData] = await Promise.all([readStorage(), collectFromTabs()])
+    const merged = mergeCaptured(storeData, memData)
+    // 按时间排序（新->旧）
+    merged.sort((a, b) => (b.time || 0) - (a.time || 0))
+    list.value = merged.slice(0, 500)
+    if (staleDetected.value && !error.value) error.value = t('popup.snifferStale')
+  } catch (e) {}
+}
+
+async function load() {
+  loading.value = true
+  error.value = ''
+  staleDetected.value = false
+  try {
+    const [storeData, memData] = await Promise.all([readStorage(), collectFromTabs()])
+    const merged = mergeCaptured(storeData, memData)
+    merged.sort((a, b) => (b.time || 0) - (a.time || 0))
+    list.value = merged.slice(0, 500)
     openIdx.value = -1
+    if (staleDetected.value) error.value = t('popup.snifferStale')
   } catch (e) {
     error.value = t('popup.snifferFail')
   } finally {
     loading.value = false
   }
+}
+
+// 遍历所有 http/https 标签页，清空其页面内存（__txSnifferClear 同时会通知 bridge 清缓冲）。
+// 只清 storage 不够：1s 自动刷新会通过 collectFromTabs 从页面内存把旧数据读回来。
+async function clearTabsMemory() {
+  if (typeof chrome === 'undefined' || !chrome.tabs?.query || !chrome.scripting?.executeScript) return
+  try {
+    const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] })
+    await Promise.all(
+      (tabs || []).map(async (tab) => {
+        if (!tab.id) return
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            world: 'MAIN',
+            files: ['content-scripts/sniffer-main.js'],
+          })
+        } catch (e) {}
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            world: 'MAIN',
+            func: () => {
+              if (typeof window.__txSnifferClear === 'function') {
+                try { window.__txSnifferClear() } catch (e) {}
+              }
+            },
+          })
+        } catch (e) {}
+      })
+    )
+  } catch (e) {}
 }
 
 async function clearAll() {
@@ -187,6 +289,7 @@ async function clearAll() {
   } else {
     localStorage.setItem(STORAGE_KEY, '[]')
   }
+  await clearTabsMemory()
   list.value = []
   openIdx.value = -1
   show(t('common.cleared'))
@@ -292,11 +395,27 @@ function prettyHeaders(h) {
   return Object.entries(h).map(([k, v]) => `${k}: ${v}`).join('\n')
 }
 
-onMounted(load)
-onBeforeUnmount(() => {})
+// 抓包数据实时刷新：最多约 1 秒延迟
+let refreshTimer = null
+onMounted(() => {
+  load()
+  refreshTimer = setInterval(refresh, 1000)
+})
+onBeforeUnmount(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+})
 </script>
 
 <style scoped>
+/* 覆盖全局 .tool-panel { height: 100% }：SnifferTool 是整页铺开的长列表，
+   若高度固定为视口，.main 将无溢出内容、无法滚动。 */
+.tool-panel {
+  height: auto;
+}
+
 .bar {
   display: flex;
   align-items: center;

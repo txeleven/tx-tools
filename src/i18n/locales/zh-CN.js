@@ -351,6 +351,7 @@ export default {
     snifferFetch: '获取当前页请求',
     snifferEmpty: '暂无捕获的请求，请在页面操作后点刷新',
     snifferFail: '获取失败，请刷新页面后重试',
+    snifferStale: '检测到旧版抓包脚本仍在运行，请刷新当前页面后重新抓包（状态码才能展示）',
     snifferNoTab: '未找到活动标签页',
     snifferSearch: '搜索接口（URL / 方法）',
     snifferNoMatch: '无匹配接口',
@@ -359,7 +360,10 @@ export default {
     snifferOpenDetail: '点击查看全部抓包详情',
     snifferEnabled: '抓包已开启',
     snifferDisabled: '抓包已关闭',
+    snifferOffTip: '抓包已关闭，打开开关后开始抓取',
     snifferClear: '清除当前页抓包',
+    snifferDetail: '查看完整请求与返回',
+    snifferNoResBody: '接口未响应或响应体不可读（可能为二进制/流）',
     sendToHttp: '发送到 HTTP 工具',
   },
   image: {
