@@ -83,7 +83,204 @@ async function registerSniffer() {
 
 chrome.runtime.onStartup.addListener(() => {
   registerSniffer()
+  scheduleAutoRefresh()
 })
+
+// ---------- 定时刷新当前标签页 ----------
+// 调度以 chrome.alarms 为主：alarms 由浏览器托管，不受 SW 休眠/重启影响。
+// 之前用 setTimeout 作主调度，SW 空闲约 30 秒即被终止，定时器丢失导致间隔不准甚至不刷新。
+const AUTO_REFRESH_KEY = 'tx-autorefresh'
+const AUTO_REFRESH_ALARM = 'tx-autorefresh-tick'
+const MIN_ALARM_SECONDS = 30 // alarms 最小周期 0.5 分钟
+let arTimer = null
+
+function normalizeInterval(s) {
+  return Math.max(3, Math.min(3600, Math.floor(Number(s) || 30)))
+}
+
+function getArCfg() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(AUTO_REFRESH_KEY, (res) => resolve(res[AUTO_REFRESH_KEY] || null))
+  })
+}
+
+function setArCfg(cfg) {
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ [AUTO_REFRESH_KEY]: cfg }, resolve)
+  })
+}
+
+function clearArTimer() {
+  if (arTimer) {
+    clearTimeout(arTimer)
+    arTimer = null
+  }
+}
+
+// 创建 alarm，返回是否成功。
+// 0.5 分钟的周期只有 Chrome 120+ 支持，旧版本会报错，这里自动回退到 1 分钟。
+function createAlarm(mins, done) {
+  try {
+    chrome.alarms.create(AUTO_REFRESH_ALARM, { periodInMinutes: mins }, () => {
+      const err = chrome.runtime && chrome.runtime.lastError
+      if (err && mins < 1) {
+        createAlarm(1, done) // 旧版 Chrome 不支持亚分钟周期
+        return
+      }
+      done(!err)
+    })
+  } catch (e) {
+    if (mins < 1) {
+      createAlarm(1, done)
+      return
+    }
+    done(false)
+  }
+}
+
+// 确保 alarm 存在且周期正确；已存在且周期一致时不重建，避免重置计时导致间隔被推迟。
+// 任何异常都不向外抛，避免阻断消息响应导致 popup 开关回弹。
+function ensureAlarm(periodMinutes) {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (v) => {
+      if (settled) return
+      settled = true
+      clearTimeout(guard)
+      resolve(v)
+    }
+    // 兜底：alarms API 未回调时也不能让 Promise 永久挂起，
+    // 否则 await 卡住导致 sendResponse 永不执行，popup 侧表现为"启用失败"
+    const guard = setTimeout(() => finish(false), 3000)
+    try {
+      if (!chrome.alarms) {
+        finish(false)
+        return
+      }
+      if (!chrome.alarms.get) {
+        createAlarm(periodMinutes, finish)
+        return
+      }
+      chrome.alarms.get(AUTO_REFRESH_ALARM, (existing) => {
+        if (existing && Math.abs((existing.periodInMinutes || 0) - periodMinutes) < 0.001) {
+          finish(true)
+          return
+        }
+        createAlarm(periodMinutes, finish)
+      })
+    } catch (e) {
+      finish(false)
+    }
+  })
+}
+
+// 恢复/启动调度。小于 30 秒的间隔无法用 alarms 表达，
+// 在 alarm 唤醒后的活跃窗口内用 setTimeout 链式补刷。
+async function scheduleAutoRefresh() {
+  clearArTimer()
+  try {
+    const cfg = await getArCfg()
+    if (!cfg || !cfg.active || !cfg.tabId || !cfg.interval) {
+      // 无有效配置：清理残留 alarm 与错误标记（storage 由 popup 负责写，避免循环触发）
+      try {
+        if (chrome.alarms && chrome.alarms.clear) chrome.alarms.clear(AUTO_REFRESH_ALARM, () => {})
+      } catch (e) {}
+      return
+    }
+    const interval = normalizeInterval(cfg.interval)
+    const alarmOk = await ensureAlarm(Math.max(MIN_ALARM_SECONDS, interval) / 60)
+    // 把调度结果写回（popup 会显示）；仅 error 字段变化不会循环触发 onChanged
+    if (!!cfg.error !== !alarmOk) {
+      await setArCfg({ ...cfg, error: alarmOk ? '' : 'alarm-unavailable' })
+    }
+    if (alarmOk && interval >= MIN_ALARM_SECONDS) return // 长间隔完全交给 alarm 调度
+    runShortChain(interval)
+  } catch (e) {}
+}
+
+// 配置变化驱动调度：storage.onChanged 会唤醒休眠的 SW，
+// 比消息通道可靠（popup 与 SW 之间不再依赖 sendMessage 响应）。
+// count/nextAt 的例行更新不触发重调度，避免 alarm 计时被反复重置。
+if (chrome.storage && chrome.storage.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes[AUTO_REFRESH_KEY]) return
+    const old = changes[AUTO_REFRESH_KEY].oldValue || {}
+    const neu = changes[AUTO_REFRESH_KEY].newValue || {}
+    if (old.active === neu.active && old.interval === neu.interval && old.tabId === neu.tabId) return
+    scheduleAutoRefresh()
+  })
+}
+
+function runShortChain(interval) {
+  // 短间隔链式刷新：每次 refreshOnce 中的 tabs API 调用都会重置 SW 的
+  // 空闲计时器（约 30 秒），间隔小于 30 秒时 SW 保持存活、链持续运行；
+  // 若 SW 意外终止，alarm（兜底唤醒）触发时重启链。不设次数上限，
+  // 持续刷新直到用户关闭开关（cfg.active = false）。
+  const step = async () => {
+    const cfg = await getArCfg()
+    if (!cfg || !cfg.active) return
+    const ok = await refreshOnce(cfg)
+    if (!ok) return
+    clearArTimer()
+    arTimer = setTimeout(step, interval * 1000)
+  }
+  clearArTimer()
+  arTimer = setTimeout(step, interval * 1000)
+}
+
+// 执行一次刷新；返回 false 表示已停止（目标标签页不存在等）
+async function refreshOnce(cfg) {
+  const interval = normalizeInterval(cfg.interval)
+  try {
+    // 注意：不能用 tab.url 做校验——扩展没有 tabs 权限时
+    // chrome.tabs.get 不返回 url（activeTab 授权在页面刷新后也会失效），
+    // 之前据此判停导致"到点未刷新就自动停止"。只确认标签页仍存在即可。
+    const tab = await chrome.tabs.get(cfg.tabId)
+    if (!tab || !tab.id) {
+      stopAutoRefresh()
+      return false
+    }
+    chrome.tabs.reload(tab.id, { bypassCache: false })
+  } catch (e) {
+    // 标签页已关闭
+    stopAutoRefresh()
+    return false
+  }
+  await setArCfg({ ...cfg, count: (cfg.count || 0) + 1, nextAt: Date.now() + interval * 1000 })
+  return true
+}
+
+// alarm 触发：刷新一次；短间隔时在活跃窗口内继续链式补刷。
+// 必须做存在性判断：权限未生效时若直接访问 onAlarm 会抛错，
+// 由于代码在 SW 顶层，异常会中断整个脚本，导致后面所有监听器都无法注册。
+if (chrome.alarms && chrome.alarms.onAlarm) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== AUTO_REFRESH_ALARM) return
+    ;(async () => {
+      try {
+        const cfg = await getArCfg()
+        if (!cfg || !cfg.active) {
+          stopAutoRefresh()
+          return
+        }
+        const interval = normalizeInterval(cfg.interval)
+        const ok = await refreshOnce(cfg)
+        if (ok && interval < MIN_ALARM_SECONDS) runShortChain(interval)
+      } catch (e) {}
+    })()
+  })
+}
+
+function stopAutoRefresh() {
+  clearArTimer()
+  setArCfg({ active: false })
+  try {
+    if (chrome.alarms && chrome.alarms.clear) chrome.alarms.clear(AUTO_REFRESH_ALARM, () => {})
+  } catch (e) {}
+}
+
+// SW 每次启动/唤醒都恢复调度（扩展重新加载后 alarms 会丢失，需重建）
+scheduleAutoRefresh()
 
 // ---------- Offscreen 剪贴板 ----------
 let offscreenReady = false
@@ -191,4 +388,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     })
     return true
   }
+
+  // 定时刷新不再走消息通道：popup 直接写 storage，
+  // SW 通过 storage.onChanged 自动调度（见上方 onChanged 监听）。
 })

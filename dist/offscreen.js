@@ -1,6 +1,9 @@
 // Offscreen 文档：负责后台复制到剪贴板
-chrome.runtime.onMessage.addListener(async (msg, sender, sendResponse) => {
-  if (msg?.type === 'copy') {
+// 注意：Chrome 不支持 async 形式的 onMessage 监听器（返回 Promise 而非 true
+// 会导致消息端口提前关闭、sendResponse 失效），必须同步返回 true。
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== 'copy') return
+  ;(async () => {
     try {
       await navigator.clipboard.writeText(msg.text)
       sendResponse({ ok: true })
@@ -20,6 +23,6 @@ chrome.runtime.onMessage.addListener(async (msg, sender, sendResponse) => {
         sendResponse({ ok: false, error: e2.message })
       }
     }
-    return true // 异步响应
-  }
+  })()
+  return true // 异步响应
 })

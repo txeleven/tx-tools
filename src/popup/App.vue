@@ -12,6 +12,70 @@
       <button class="icon-btn" @click="openOptions" title="Settings">⚙</button>
     </header>
 
+    <!-- 定时刷新当前标签页 -->
+    <div class="sniffer ar-panel">
+      <div class="sniffer-head" @click="arOpen = !arOpen">
+        <span class="sniffer-title">🔃 {{ t('popup.autoRefreshTitle') }}</span>
+        <label
+          class="sniffer-toggle"
+          :title="arEnabled ? t('popup.autoRefreshOn') : t('popup.autoRefreshOff')"
+          @click.stop
+        >
+          <input type="checkbox" v-model="arEnabled" @change="onToggleAutoRefresh" />
+          <span class="track"><span class="thumb"></span></span>
+        </label>
+        <span v-if="arEnabled" class="ar-badge" :title="t('popup.autoRefreshRunning')">
+          {{ arCountdown > 0 ? `${arCountdown}s` : t('popup.autoRefreshRunning') }}
+        </span>
+      </div>
+      <div v-if="arOpen || arEnabled" class="sniffer-body ar-body">
+        <div class="ar-row">
+          <label class="ar-label" for="ar-interval">{{ t('popup.autoRefreshInterval') }}</label>
+          <input
+            id="ar-interval"
+            class="ar-input"
+            type="number"
+            min="3"
+            max="3600"
+            step="1"
+            v-model.number="arInterval"
+            @change="onIntervalChange"
+          />
+          <span class="ar-unit">{{ t('popup.autoRefreshSeconds') }}</span>
+        </div>
+        <div class="ar-row ar-presets">
+          <button
+            v-for="p in AR_PRESETS"
+            :key="p"
+            class="ar-preset"
+            :class="{ active: arInterval === p }"
+            @click="setIntervalPreset(p)"
+          >
+            {{ formatInterval(p) }}
+          </button>
+        </div>
+        <div v-if="arTarget" class="ar-row">
+          <label class="ar-label">{{ t('popup.autoRefreshTarget') }}</label>
+          <span class="ar-url" :title="arTarget">{{ arTarget }}</span>
+          <button class="ar-btn" @click="rebindTarget" :title="t('popup.autoRefreshRebindTip')">
+            {{ t('popup.autoRefreshRebind') }}
+          </button>
+        </div>
+        <div v-if="arEnabled" class="ar-row ar-meta">
+          <span class="ar-stat">
+            {{ t('popup.autoRefreshCount', { n: arCount }) }}
+          </span>
+          <span v-if="arCountdown > 0" class="ar-stat">
+            {{ t('popup.autoRefreshNext', { s: arCountdown }) }}
+          </span>
+        </div>
+        <div v-if="arError" class="ar-error">{{ arError }}</div>
+        <div class="ar-note">
+          {{ arEnabled ? t('popup.autoRefreshRunningTip') : t('popup.autoRefreshStopped') }}
+        </div>
+      </div>
+    </div>
+
     <!-- 页面请求抓包 -->
     <div class="sniffer">
       <div class="sniffer-head" @click="toggleSniffer">
@@ -207,6 +271,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopAutoRefresh()
+  stopArPoll()
 })
 
 watch(activeTab, async (id) => {
@@ -218,6 +283,200 @@ watch(activeTab, async (id) => {
 
 function tabName(tab) {
   return t(tab.nameKey)
+}
+
+// ---------- 定时刷新当前标签页 ----------
+// 由 background（service worker）在后台运行：popup 关闭后仍持续刷新，
+// 且只刷新开启时绑定的那个标签页，不影响其它页面。
+const AUTO_REFRESH_KEY = 'tx-autorefresh'
+const AR_PRESETS = [10, 30, 60, 300]
+const arOpen = ref(false)
+const arEnabled = ref(false)
+const arInterval = ref(30)
+const arTarget = ref('')
+const arCount = ref(0)
+const arNextAt = ref(0)
+const arCountdown = ref(0)
+const arError = ref('')
+let arPollTimer = null
+
+function normalizeInterval(v) {
+  return Math.max(3, Math.min(3600, Math.floor(Number(v) || 30)))
+}
+
+function formatInterval(s) {
+  return s >= 60 && s % 60 === 0 ? `${s / 60}m` : `${s}s`
+}
+
+// 读取后台运行状态（后台刷新时 popup 也能同步到次数与下次时间）
+// syncInterval=true 时才回写间隔，避免轮询覆盖用户正在编辑的间隔值
+async function readArState(syncInterval) {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return
+  try {
+    const res = await new Promise((resolve) => chrome.storage.local.get(AUTO_REFRESH_KEY, resolve))
+    const cfg = res[AUTO_REFRESH_KEY]
+    if (cfg && cfg.active) {
+      arEnabled.value = true
+      arTarget.value = cfg.url || ''
+      arCount.value = cfg.count || 0
+      arNextAt.value = cfg.nextAt || 0
+      if (syncInterval && cfg.interval) arInterval.value = cfg.interval
+      // 后台调度结果（alarm 是否可用）在面板上可见
+      arError.value =
+        cfg.error === 'alarm-unavailable' ? t('popup.autoRefreshNeedReload') : cfg.error || ''
+    } else {
+      arEnabled.value = false
+      arCount.value = 0
+      arNextAt.value = 0
+      arTarget.value = ''
+    }
+  } catch (e) {}
+}
+
+// 面板展开或运行中时轮询状态，驱动倒计时
+function startArPoll() {
+  stopArPoll()
+  arPollTimer = setInterval(async () => {
+    await readArState()
+    arCountdown.value = arNextAt.value
+      ? Math.max(0, Math.ceil((arNextAt.value - Date.now()) / 1000))
+      : 0
+  }, 500)
+}
+function stopArPoll() {
+  if (arPollTimer) {
+    clearInterval(arPollTimer)
+    arPollTimer = null
+  }
+}
+
+// 展开/收起时同步启动或停止轮询
+watch([arOpen, arEnabled], ([open, on]) => {
+  if (open || on) startArPoll()
+  else {
+    stopArPoll()
+    arCountdown.value = 0
+  }
+})
+
+// 初始化：读取后台是否正在运行
+;(async () => {
+  await readArState(true)
+  if (arEnabled.value) {
+    arOpen.value = true
+    startArPoll()
+  }
+})()
+
+// 定时刷新不走消息通道：popup 直接写 storage，后台通过 storage.onChanged
+// （会唤醒休眠的 service worker）自动感知并调度。彻底避免消息响应竞争
+// （扩展内 SW / offscreen / options 多个监听上下文时 sendMessage 结果不可控）。
+function readArCfgRaw() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(AUTO_REFRESH_KEY, (res) => resolve(res[AUTO_REFRESH_KEY] || null))
+  })
+}
+
+function writeArCfg(cfg) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ [AUTO_REFRESH_KEY]: cfg }, () => {
+      const err = chrome.runtime && chrome.runtime.lastError
+      if (err) reject(new Error(err.message || 'storage set failed'))
+      else resolve()
+    })
+  })
+}
+
+async function onToggleAutoRefresh() {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return
+  if (arEnabled.value) {
+    // 开启：绑定当前活动标签页，直接写 storage
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (!tab || !tab.id || !/^https?:\/\//i.test(tab.url || '')) {
+        arEnabled.value = false
+        arError.value = t('popup.autoRefreshNoTab')
+        show(arError.value)
+        return
+      }
+      const interval = normalizeInterval(arInterval.value)
+      arInterval.value = interval
+      arTarget.value = tab.url || ''
+      arError.value = ''
+      await writeArCfg({
+        active: true,
+        tabId: tab.id,
+        interval,
+        url: tab.url || '',
+        count: 0,
+        nextAt: Date.now() + interval * 1000,
+      })
+      arCount.value = 0
+      arNextAt.value = Date.now() + interval * 1000
+      arOpen.value = true
+      show(t('popup.autoRefreshOn'))
+    } catch (e) {
+      arEnabled.value = false
+      arError.value = t('popup.autoRefreshFailReason', {
+        msg: (e && e.message) || 'storage write failed',
+      })
+    }
+  } else {
+    // 关闭：写 storage 即可（后台 onChanged 会清理 alarm，不依赖 popup 存活）
+    try {
+      await writeArCfg({ active: false })
+      arTarget.value = ''
+      arCountdown.value = 0
+      show(t('popup.autoRefreshOff'))
+    } catch (e) {}
+  }
+}
+
+// 运行中修改间隔：写 storage，后台自动按新周期重建 alarm
+async function onIntervalChange() {
+  if (!arEnabled.value) return
+  const interval = normalizeInterval(arInterval.value)
+  arInterval.value = interval
+  try {
+    const cfg = await readArCfgRaw()
+    if (!cfg || !cfg.active) return
+    await writeArCfg({ ...cfg, interval, nextAt: Date.now() + interval * 1000 })
+    arNextAt.value = Date.now() + interval * 1000
+  } catch (e) {}
+}
+
+async function setIntervalPreset(p) {
+  arInterval.value = p
+  await onIntervalChange()
+}
+
+// 重新绑定：把定时刷新目标改为当前活动标签页
+async function rebindTarget() {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    if (!tab || !tab.id || !/^https?:\/\//i.test(tab.url || '')) {
+      arError.value = t('popup.autoRefreshNoTab')
+      show(arError.value)
+      return
+    }
+    const cfg = await readArCfgRaw()
+    if (cfg && cfg.active) {
+      await writeArCfg({
+        ...cfg,
+        tabId: tab.id,
+        url: tab.url || '',
+        count: 0,
+        nextAt: Date.now() + normalizeInterval(cfg.interval) * 1000,
+      })
+      arTarget.value = tab.url || ''
+      arCount.value = 0
+      arError.value = ''
+      show(t('popup.autoRefreshRebound'))
+    } else {
+      arTarget.value = tab.url || ''
+    }
+  } catch (e) {}
 }
 
 // ---------- 页面请求抓包 ----------
@@ -766,6 +1025,137 @@ async function openOptions() {
 .sniffer {
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
+}
+
+/* 定时刷新当前标签页 */
+.ar-badge {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.ar-body {
+  border-top: 1px solid var(--border);
+}
+
+.ar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 0;
+  font-size: 12px;
+}
+
+.ar-label {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.ar-input {
+  width: 86px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.ar-input:focus {
+  border-color: var(--primary);
+}
+
+.ar-input:disabled {
+  opacity: 0.6;
+}
+
+.ar-unit {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.ar-presets {
+  padding-top: 6px;
+  gap: 6px;
+}
+
+.ar-preset {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.ar-preset:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.ar-preset.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.ar-btn {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.ar-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.ar-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.ar-meta {
+  padding-top: 6px;
+  gap: 12px;
+}
+
+.ar-stat {
+  font-size: 11px;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.ar-error {
+  margin: 8px 14px 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--danger, #d32f2f);
+  background: rgba(207, 34, 46, 0.08);
+  border-radius: 6px;
+}
+
+.ar-note {
+  padding: 8px 14px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .sniffer-head {

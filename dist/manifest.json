@@ -27,7 +27,8 @@
     "scripting",
     "activeTab",
     "notifications",
-    "offscreen"
+    "offscreen",
+    "alarms"
   ],
   "host_permissions": [
     "http://*/*",
