@@ -11,6 +11,10 @@
       <button @click="decodeBase64">{{ t('stringCodec.base64Decode') }}</button>
       <button @click="encodeUrl">{{ t('stringCodec.urlEncode') }}</button>
       <button @click="decodeUrl">{{ t('stringCodec.urlDecode') }}</button>
+      <button @click="unicodeEscape">{{ t('stringCodec.unicodeEscape') }}</button>
+      <button @click="unicodeUnescape">{{ t('stringCodec.unicodeUnescape') }}</button>
+      <button @click="toUpperCaseText">{{ t('stringCodec.toUpperCase') }}</button>
+      <button @click="toLowerCaseText">{{ t('stringCodec.toLowerCase') }}</button>
       <span class="spacer"></span>
       <button @click="clear">🗑 {{ t('common.clear') }}</button>
     </div>
@@ -21,8 +25,6 @@
       <label class="check-line">
         <input type="checkbox" v-model="allEntities" /> {{ t('html.allEntities') }}
       </label>
-      <button @click="unicodeEscape">{{ t('stringCodec.unicodeEscape') }}</button>
-      <button @click="unicodeUnescape">{{ t('stringCodec.unicodeUnescape') }}</button>
       <button @click="rot13">{{ t('stringCodec.rot13') }}</button>
       <button @click="rot47">{{ t('stringCodec.rot47') }}</button>
       <button @click="toHex">{{ t('stringCodec.toHex') }}</button>
@@ -51,13 +53,33 @@
       <button class="primary" @click="beautify">{{ t('beautify.run') }}</button>
       <button class="primary"  @click="minify">{{ t('minify.run') }}</button>
       <button class="primary" :disabled="!input" @click="copyInput">{{ t('common.copy') }}</button>
+      <span class="spacer"></span>
+      <input
+        v-model="findText"
+        class="find-input"
+        :placeholder="t('stringCodec.findPlaceholder')"
+        @keydown.enter.prevent="doFind"
+      />
+      <input
+        v-model="replaceText"
+        class="find-input"
+        :placeholder="t('stringCodec.replacePlaceholder')"
+        @keydown.enter.prevent="doReplace"
+      />
+      <label class="check-line">
+        <input type="checkbox" v-model="caseSensitive" /> {{ t('stringCodec.caseSensitive') }}
+      </label>
+      <span class="find-count" v-if="findCount >= 0" :class="{ zero: findCount === 0 }">
+        {{ t('stringCodec.matchCount', { n: findCount }) }}
+      </span>
+      <button class="primary" @click="doReplace">{{ t('stringCodec.replaceAll') }}</button>
     </div>
 
     <div class="codec-area" :class="{ expanded }">
       <button class="expand-btn" @click="expanded = !expanded" :title="t(expanded ? 'common.restore' : 'common.expand')">
         {{ expanded ? '⤡' : '⤢' }}
       </button>
-      <HlTextarea v-model="input" :language="lang" :placeholder="t('stringCodec.placeholder')" fill />
+      <HlTextarea v-model="input" :language="lang" :placeholder="t('stringCodec.placeholder')" :marks="marks" fill />
     </div>
 
     <div class="status" :class="statusClass" v-if="status">{{ status }}</div>
@@ -65,7 +87,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import beautifyPkg from 'js-beautify'
 import { formatSql, formatXml } from '../tools/formatSqlXml.js'
 import { formatPython } from '../tools/formatPython.js'
@@ -206,6 +228,18 @@ function rot47() {
     const c = ch.charCodeAt(0)
     return String.fromCharCode(33 + ((c + 14) % 94))
   })
+  setStatus(t('stringCodec.done'))
+}
+
+// 转大写
+function toUpperCaseText() {
+  input.value = input.value.toUpperCase()
+  setStatus(t('stringCodec.done'))
+}
+
+// 转小写
+function toLowerCaseText() {
+  input.value = input.value.toLowerCase()
   setStatus(t('stringCodec.done'))
 }
 
@@ -398,6 +432,64 @@ async function copyInput() {
   if (!input.value) return
   if (await copyText(input.value)) show(t('common.copied'))
 }
+
+// ---------- 查找替换 ----------
+const findText = ref('')
+const replaceText = ref('')
+const caseSensitive = ref(false)
+const findCount = ref(-1) // -1 表示未查找，不显示计数
+const marks = ref([])
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// 非重叠从左到右扫描所有匹配
+function computeMatches() {
+  if (!findText.value) return []
+  const re = new RegExp(escapeRegExp(findText.value), caseSensitive.value ? 'g' : 'gi')
+  const out = []
+  let m
+  while ((m = re.exec(input.value)) !== null) {
+    out.push({ start: m.index, end: m.index + m[0].length })
+    if (m[0].length === 0) re.lastIndex++
+  }
+  return out
+}
+
+function doFind() {
+  if (!findText.value) {
+    marks.value = []
+    findCount.value = -1
+    return
+  }
+  const matches = computeMatches()
+  marks.value = matches
+  findCount.value = matches.length
+}
+
+function doReplace() {
+  if (!findText.value) {
+    setStatus(t('stringCodec.findEmpty'), 'err')
+    return
+  }
+  const matches = computeMatches()
+  if (!matches.length) {
+    setStatus(t('stringCodec.noMatch'), 'err')
+    return
+  }
+  const re = new RegExp(escapeRegExp(findText.value), caseSensitive.value ? 'g' : 'gi')
+  // 用函数替换，避免替换文本中的 $& 等特殊序列被解释
+  input.value = input.value.replace(re, () => replaceText.value)
+  setStatus(t('stringCodec.replaced', { n: matches.length }))
+  doFind()
+}
+
+// 输入即查找；文本变化（含其他转换操作）后自动刷新计数与高亮
+watch([findText, caseSensitive], doFind)
+watch(input, () => {
+  if (findText.value) doFind()
+})
 </script>
 
 <style scoped>
@@ -414,6 +506,24 @@ async function copyInput() {
   font-size: 12px;
   color: var(--text-secondary);
   margin-right: -6px;
+}
+
+/* 查找替换（位于工具栏最右侧）：输入框弹性伸展，尽量占满剩余空间 */
+.find-input {
+  flex: 1 1 220px;
+  max-width: 320px;
+  min-width: 180px;
+}
+
+.find-count {
+  font-size: 12px;
+  color: var(--primary);
+  white-space: nowrap;
+  margin-right: 2px;
+}
+
+.find-count.zero {
+  color: var(--danger, #dc2626);
 }
 
 /* 放大覆盖区域：默认占满剩余空间；放大时覆盖左边和顶部（非浏览器全屏） */

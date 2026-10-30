@@ -150,6 +150,9 @@
               resize-key="http-body"
               :placeholder="bodyPlaceholder"
             />
+            <div v-if="bodyMode === 'text'" class="text-body-actions">
+              <button @click="convertTextToForm">{{ t('http.textToForm') }}</button>
+            </div>
             <div v-if="bodyMode === 'form'" class="form-rows">
               <div v-for="(p, i) in formBody" :key="i" class="form-row">
                 <input v-model="p.key" type="text" placeholder="key" />
@@ -207,11 +210,19 @@
           </div>
           <div class="response-tabs">
             <button :class="{ active: responseTab === 'body' }" @click="responseTab = 'body'">{{ t('http.responseBody') }}</button>
+            <button v-if="isHtmlResponse" :class="{ active: responseTab === 'preview' }" @click="responseTab = 'preview'">{{ t('http.htmlPreview') }}</button>
             <button :class="{ active: responseTab === 'headers' }" @click="responseTab = 'headers'">{{ t('http.responseHeaders') }}</button>
             <button :class="{ active: responseTab === 'cookie' }" @click="responseTab = 'cookie'">Cookie</button>
             <button :class="{ active: responseTab === 'raw' }" @click="responseTab = 'raw'">{{ t('http.responseRaw') }}</button>
           </div>
-          <LinesBox v-if="responseTab === 'body'" :text="formattedResponseBody" class="response-body-lines">
+          <iframe
+            v-if="responseTab === 'preview' && isHtmlResponse"
+            class="html-preview"
+            :srcdoc="response.body"
+            sandbox=""
+            :title="t('http.htmlPreview')"
+          ></iframe>
+          <LinesBox v-else-if="responseTab === 'body'" :text="formattedResponseBody" class="response-body-lines">
             <pre class="response-body" v-html="highlightedResponseBody"></pre>
           </LinesBox>
           <LinesBox v-else-if="responseTab === 'headers'" :text="responseHeadersText" class="response-headers-lines">
@@ -362,8 +373,11 @@ const canHaveBody = computed(() => BODY_METHODS.includes(method.value))
 const url = ref('')
 const DEFAULT_HEADERS = [
   { key: 'Accept', value: '*/*', enabled: true },
+  { key: 'Accept-Language', value: 'zh-CN,zh;q=0.9,en;q=0.8', enabled: true },
   { key: 'Content-Type', value: 'application/json', enabled: true },
   { key: 'Cache-Control', value: 'no-cache', enabled: true },
+  { key: 'Pragma', value: 'no-cache', enabled: false },
+  { key: 'Authorization', value: 'Bearer ', enabled: false },
 ]
 const headers = ref(DEFAULT_HEADERS.map((h) => ({ ...h })))
 const bodyMode = ref('none')
@@ -589,6 +603,14 @@ const bodyPlaceholder = computed(() => {
   return ''
 })
 
+const isHtmlResponse = computed(() => {
+  if (!response.value) return false
+  const contentType = (response.value.contentType || '').toLowerCase()
+  const text = (response.value.body || '').trim().slice(0, 500).toLowerCase()
+  return contentType.includes('text/html') || contentType.includes('application/xhtml+xml') ||
+    text.startsWith('<!doctype html') || text.startsWith('<html')
+})
+
 const formattedResponseBody = computed(() => {
   if (!response.value) return ''
   return formatBody(response.value.body, response.value.contentType)
@@ -667,8 +689,8 @@ const curlCommand = computed(() => {
   const parts = ['curl']
   parts.push(`-X ${method.value}`)
   parts.push(`'${finalUrl.value || url.value}'`)
-  for (const h of headers.value) {
-    if (h.enabled && h.key) parts.push(`-H '${shq(h.key)}: ${shq(h.value)}'`)
+  for (const [key, value] of buildHeaders()) {
+    parts.push(`-H '${shq(key)}: ${shq(value)}'`)
   }
   const withBody = BODY_METHODS.includes(method.value) && bodyMode.value !== 'none'
   if (withBody) {
@@ -821,6 +843,26 @@ function removeFormRow(i) {
   formBody.value.splice(i, 1)
 }
 
+function convertTextToForm() {
+  const text = body.value.trim()
+  if (!text) {
+    show(t('http.textToFormEmpty'))
+    return
+  }
+  // 同时支持 a=1&b=2 和每行一个 key=value；URLSearchParams 负责解码
+  const params = new URLSearchParams(text.replace(/\r?\n/g, '&'))
+  const rows = []
+  for (const [key, value] of params) {
+    if (key) rows.push({ key, value })
+  }
+  if (!rows.length) {
+    show(t('http.textToFormEmpty'))
+    return
+  }
+  formBody.value = rows
+  bodyMode.value = 'form'
+}
+
 function onFileChange(e) {
   const files = Array.from(e.target.files || [])
   if (!files.length) return
@@ -877,20 +919,19 @@ function buildHeaders() {
       h.append(item.key, item.value)
     }
   }
-  if (bodyMode.value === 'form' && !hasHeader('Content-Type')) {
-    h.append('Content-Type', 'application/x-www-form-urlencoded')
+  // Content-Type 始终跟随当前选中的请求体类型，避免默认 JSON 头污染 Form/Text。
+  const contentTypes = {
+    json: 'application/json',
+    form: 'application/x-www-form-urlencoded;charset=UTF-8',
+    text: 'text/plain;charset=UTF-8',
   }
-  if (bodyMode.value === 'file') {
-    for (const k of [...h.keys()]) {
-      if (k.toLowerCase() === 'content-type') h.delete(k)
-    }
+  if (contentTypes[bodyMode.value]) {
+    h.set('Content-Type', contentTypes[bodyMode.value])
+  } else if (bodyMode.value === 'file') {
+    // 文件上传必须让浏览器自动生成带 boundary 的 multipart 请求头。
+    h.delete('Content-Type')
   }
   return h
-}
-
-function hasHeader(key) {
-  const lower = key.toLowerCase()
-  return headers.value.some((h) => h.enabled && h.key.toLowerCase() === lower)
 }
 
 const REQUEST_TIMEOUT = 60000
@@ -1770,6 +1811,12 @@ function genId() {
   text-align: center;
 }
 
+.text-body-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
 .form-rows {
   display: flex;
   flex-direction: column;
@@ -1970,6 +2017,14 @@ function genId() {
   font-weight: 600;
   border-bottom: 2px solid var(--primary);
   margin-bottom: -1px;
+}
+
+.html-preview {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
 }
 
 .response-body-lines {

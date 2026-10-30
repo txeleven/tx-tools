@@ -32,6 +32,8 @@ const props = defineProps({
   minHeight: { type: String, default: '' },
   language: { type: String, default: '' },
   fill: { type: Boolean, default: false },
+  // 查找高亮区间：[{ start, end }]（基于 modelValue 的字符偏移）
+  marks: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update:modelValue', 'input'])
 
@@ -58,22 +60,41 @@ async function applyHighlights() {
     registeredTypes.clear()
   }
   await nextTick()
-  if (!highlightSupported || !props.language) return
+  if (!highlightSupported) return
   const textNode = el.firstChild
   if (!textNode || textNode.nodeType !== 3 || !textNode.length) return
-  const tokens = getHighlightTokens(props.modelValue || '', props.language)
-  const byType = new Map()
-  for (const t of tokens) {
-    if (t.start >= textNode.length) continue
-    const range = new Range()
-    range.setStart(textNode, t.start)
-    range.setEnd(textNode, Math.min(t.end, textNode.length))
-    if (!byType.has(t.type)) byType.set(t.type, [])
-    byType.get(t.type).push(range)
+  if (props.language) {
+    const tokens = getHighlightTokens(props.modelValue || '', props.language)
+    const byType = new Map()
+    for (const t of tokens) {
+      if (t.start >= textNode.length) continue
+      const range = new Range()
+      range.setStart(textNode, t.start)
+      range.setEnd(textNode, Math.min(t.end, textNode.length))
+      if (!byType.has(t.type)) byType.set(t.type, [])
+      byType.get(t.type).push(range)
+    }
+    for (const [type, ranges] of byType) {
+      CSS.highlights.set(type, new Highlight(...ranges))
+      registeredTypes.add(type)
+    }
   }
-  for (const [type, ranges] of byType) {
-    CSS.highlights.set(type, new Highlight(...ranges))
-    registeredTypes.add(type)
+  // 查找高亮（不依赖 language）
+  if (props.marks && props.marks.length) {
+    const ranges = []
+    for (const m of props.marks) {
+      const start = Math.max(0, m.start)
+      const end = Math.min(m.end, textNode.length)
+      if (end <= start) continue
+      const range = new Range()
+      range.setStart(textNode, start)
+      range.setEnd(textNode, end)
+      ranges.push(range)
+    }
+    if (ranges.length) {
+      CSS.highlights.set('find-match', new Highlight(...ranges))
+      registeredTypes.add('find-match')
+    }
   }
 }
 
@@ -128,6 +149,7 @@ function refresh() {
 }
 watch(() => props.modelValue, refresh, { flush: 'post' })
 watch(() => props.language, refresh, { flush: 'post' })
+watch(() => props.marks, refresh, { flush: 'post' })
 
 function syncScroll() {
   if (gutter.value && area.value) gutter.value.scrollTop = area.value.scrollTop
@@ -268,5 +290,13 @@ function syncScroll() {
   white-space: pre-wrap;
   overflow-wrap: break-word;
   box-sizing: border-box;
+}
+</style>
+
+<style>
+/* 查找匹配高亮（::highlight 伪元素不支持 scoped） */
+::highlight(find-match) {
+  background-color: rgba(250, 204, 21, 0.5);
+  outline: 1px solid rgba(217, 119, 6, 0.6);
 }
 </style>
